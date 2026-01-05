@@ -16,7 +16,10 @@ import SearchBox from "./SearchBox";
 import { Tooltip } from "react-tooltip";
 import { createPortal } from "react-dom";
 
-export default function Sidebar() {
+export default function Sidebar({
+  checkedWorkspaces = {},
+  onCheckboxChange = null,
+}) {
   const { user } = useUser();
   const { logo } = useLogo();
   const sidebarRef = useRef(null);
@@ -62,7 +65,10 @@ export default function Sidebar() {
               <div className="relative h-[calc(100%-60px)] flex flex-col w-full justify-between pt-[10px] overflow-y-scroll no-scroll">
                 <div className="flex flex-col gap-y-2 pb-[60px] gap-y-[14px] overflow-y-scroll no-scroll">
                   <SearchBox user={user} showNewWsModal={showNewWsModal} />
-                  <ActiveWorkspaces />
+                  <ActiveWorkspaces
+                    checkedWorkspaces={checkedWorkspaces}
+                    onCheckboxChange={onCheckboxChange}
+                  />
                 </div>
               </div>
               <div className="absolute bottom-0 left-0 right-0 pt-4 pb-3 rounded-b-[16px] bg-theme-bg-sidebar bg-opacity-80 backdrop-filter backdrop-blur-md z-1">

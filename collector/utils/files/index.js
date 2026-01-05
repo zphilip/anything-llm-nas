@@ -2,6 +2,15 @@ const fs = require("fs");
 const path = require("path");
 const { MimeDetector } = require("./mime");
 
+// Optional Redis caching support
+let redisHelper = null;
+try {
+  const redisModule = require("./redis");
+  redisHelper = redisModule.redisHelper;
+} catch (e) {
+  // Redis not available, caching disabled
+}
+
 /**
  * The folder where documents are stored to be stored when
  * processed by the collector.
@@ -214,11 +223,141 @@ function sanitizeFileName(fileName) {
   return fileName.replace(/[<>:"\/\\|?*]/g, "");
 }
 
+/**
+ * Write large files to server with chunk-based streaming
+ * Useful for processing large documents to avoid memory issues
+ * @param {Object} data - Document data with pageContent
+ * @param {string} filename - Name of the file
+ * @param {string} destinationPath - Destination path (optional if using override)
+ * @param {string|null} destinationOverride - Override destination path
+ */
+async function writeToServerDocumentsWithChunks(data = {}, filename, destinationPath = null, destinationOverride = null) {
+  if (!filename) {
+    throw new Error('Filename is required');
+  }
+
+  let destination = null;
+  if (destinationOverride) {
+    destination = path.resolve(destinationOverride);
+  } else if (destinationPath) {
+    destination = path.resolve(__dirname, destinationPath);
+  } else {
+    destination = path.resolve(documentsFolder, "custom-documents");
+  }
+
+  if (!fs.existsSync(destination)) {
+    fs.mkdirSync(destination, { recursive: true });
+  }
+
+  const destinationFilePath = normalizePath(
+    path.resolve(destination, filename) + ".json"
+  );
+
+  try {
+    const writeStream = fs.createWriteStream(destinationFilePath, {
+      flags: 'w',
+      encoding: 'utf8',
+      highWaterMark: 64 * 1024 // 64KB chunks
+    });
+
+    const writeChunk = (chunk) => {
+      return new Promise((resolve, reject) => {
+        const canContinue = writeStream.write(chunk);
+        if (!canContinue) {
+          writeStream.once('drain', resolve);
+        } else {
+          resolve();
+        }
+      });
+    };
+
+    await writeChunk('{\\n');
+
+    const { pageContent, ...metadata } = data;
+    for (const [key, value] of Object.entries(metadata)) {
+      await writeChunk(`  "${key}": ${JSON.stringify(value)},\\n`);
+    }
+
+    await writeChunk('  "pageContent": "');
+    
+    if (pageContent && pageContent.length > 0) {
+      const chunkSize = 1024 * 1024; // 1MB chunks
+      for (let i = 0; i < pageContent.length; i += chunkSize) {
+        const chunk = pageContent.slice(i, i + chunkSize)
+          .replace(/\\\\/g, '\\\\\\\\')
+          .replace(/"/g, '\\\\"')
+          .replace(/\\n/g, '\\\\n')
+          .replace(/\\r/g, '\\\\r')
+          .replace(/\\t/g, '\\\\t');
+        
+        if (chunk.length > 0) {
+          await writeChunk(chunk);
+        }
+        
+        if (global.gc) global.gc();
+      }
+    }
+
+    await writeChunk('"\\n}');
+
+    await new Promise((resolve, reject) => {
+      writeStream.end();
+      writeStream.on('finish', resolve);
+      writeStream.on('error', reject);
+    });
+
+    return {
+      ...data,
+      location: destinationFilePath.split("/").slice(-2).join("/"),
+    };
+
+  } catch (error) {
+    console.error('Error writing document with chunks:', error);
+    throw error;
+  } finally {
+    if (global.gc) global.gc();
+  }
+}
+
+/**
+ * Handle file metadata caching with Redis (if available)
+ * Falls back to no-op if Redis is not configured
+ * @param {Object} data - File metadata
+ * @param {string} operation - 'read' or 'write'
+ */
+async function handleLocalFilesCache(data = {}, operation = 'read') {
+  if (!redisHelper) {
+    return operation === 'read' ? { files: [] } : data;
+  }
+
+  try {
+    const folderName = path.dirname(data.location) || '';
+    const fileName = path.basename(data.location);
+    
+    if (!fileName) {
+      throw new Error('File name is required');
+    }
+
+    if (operation === 'write') {
+      await redisHelper.saveFileMetadata(folderName, fileName, data);
+      return data;
+    } else {
+      const metadata = await redisHelper.getFileMetadata(folderName, fileName);
+      return metadata ? { files: [metadata] } : { files: [] };
+    }
+  } catch (error) {
+    console.error('Error handling cache:', error);
+    return operation === 'read' ? { files: [] } : data;
+  }
+}
+
 module.exports = {
   trashFile,
   isTextType,
   createdDate,
   writeToServerDocuments,
+  writeToServerDocumentsWithChunks,
+  handleLocalFilesCache,
   wipeCollectorStorage,
   normalizePath,
   isWithin,

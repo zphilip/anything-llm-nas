@@ -98,6 +98,11 @@ export default {
   apiDocs: () => {
     return `${API_BASE}/docs`;
   },
+  search: {
+    imageSearch: () => {
+      return `/search/image-search`;
+    },
+  },
   settings: {
     users: () => {
       return `/settings/users`;

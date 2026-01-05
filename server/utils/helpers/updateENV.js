@@ -113,6 +113,28 @@ const KEY_MAPPING = {
     checks: [],
   },
 
+  // LlamaCpp LLM Settings
+  LlamaCppLLMBasePath: {
+    envKey: "LLAMACPP_BASE_PATH",
+    checks: [isNotEmpty, validLLMExternalBasePath, validDockerizedUrl],
+  },
+  LlamaCppLLMModelPref: {
+    envKey: "LLAMACPP_MODEL_PREF",
+    checks: [],
+  },
+  LlamaCppLLMTokenLimit: {
+    envKey: "LLAMACPP_MODEL_TOKEN_LIMIT",
+    checks: [],
+  },
+  LlamaCppLLMPerformanceMode: {
+    envKey: "LLAMACPP_PERFORMANCE_MODE",
+    checks: [],
+  },
+  LlamaCppLLMKeepAliveSeconds: {
+    envKey: "LLAMACPP_KEEP_ALIVE_TIMEOUT",
+    checks: [isInteger],
+  },
+
   OllamaLLMBasePath: {
     envKey: "OLLAMA_BASE_PATH",
     checks: [isNotEmpty, validOllamaLLMBasePath, validDockerizedUrl],
@@ -876,6 +898,7 @@ function supportedLLM(input = "") {
     "gemini",
     "lmstudio",
     "localai",
+    "llamacpp",
     "ollama",
     "togetherai",
     "fireworksai",
@@ -931,6 +954,7 @@ function supportedEmbeddingModel(input = "") {
     "azure",
     "gemini",
     "localai",
+    "llamacpp",
     "native",
     "ollama",
     "lmstudio",

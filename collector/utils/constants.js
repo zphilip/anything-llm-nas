@@ -1,3 +1,4 @@
+const API_BASE = process.env.VITE_API_BASE || "/api";
 const WATCH_DIRECTORY = require("path").resolve(__dirname, "../hotdir");
 
 const ACCEPTED_MIMES = {
@@ -31,10 +32,23 @@ const ACCEPTED_MIMES = {
   "video/mp4": [".mp4"],
   "video/mpeg": [".mpeg"],
   "application/epub+zip": [".epub"],
+  
   "image/png": [".png"],
-  "image/jpeg": [".jpg"],
+  "image/jpeg": [".jpg", ".jpeg"],
   "image/jpg": [".jpg"],
   "image/webp": [".webp"],
+  
+  // RAW camera formats (optional - requires additional sharp plugins)
+  "image/x-nikon-nef": [".nef"],
+  "image/x-canon-cr2": [".cr2"],
+  "image/x-sony-arw": [".arw"],
+  "image/x-olympus-orf": [".orf"],
+  "image/x-panasonic-rw2": [".rw2"],
+  "image/x-fuji-raf": [".raf"],
+  "image/x-adobe-dng": [".dng"],
+  "image/x-pentax-pef": [".pef"],
+  "image/x-samsung-srw": [".srw"],
+  "image/tga": [".tga"],
 };
 
 const SUPPORTED_FILETYPE_CONVERTERS = {
@@ -73,9 +87,22 @@ const SUPPORTED_FILETYPE_CONVERTERS = {
   ".jpg": "./convert/asImage.js",
   ".jpeg": "./convert/asImage.js",
   ".webp": "./convert/asImage.js",
+  
+  // RAW formats (require additional dependencies)
+  ".nef": "./convert/asImage.js",
+  ".cr2": "./convert/asImage.js",
+  ".arw": "./convert/asImage.js",
+  ".orf": "./convert/asImage.js",
+  ".rw2": "./convert/asImage.js",
+  ".raf": "./convert/asImage.js",
+  ".dng": "./convert/asImage.js",
+  ".pef": "./convert/asImage.js",
+  ".srw": "./convert/asImage.js",
+  ".tga": "./convert/asImage.js",
 };
 
 module.exports = {
+  API_BASE,
   SUPPORTED_FILETYPE_CONVERTERS,
   WATCH_DIRECTORY,
   ACCEPTED_MIMES,

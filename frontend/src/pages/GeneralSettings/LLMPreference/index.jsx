@@ -22,6 +22,7 @@ import PerplexityLogo from "@/media/llmprovider/perplexity.png";
 import OpenRouterLogo from "@/media/llmprovider/openrouter.jpeg";
 import GroqLogo from "@/media/llmprovider/groq.png";
 import KoboldCPPLogo from "@/media/llmprovider/koboldcpp.png";
+import LlamaCppLogo from "@/media/llmprovider/Llama1-logo.svg";
 import TextGenWebUILogo from "@/media/llmprovider/text-generation-webui.png";
 import CohereLogo from "@/media/llmprovider/cohere.png";
 import LiteLLMLogo from "@/media/llmprovider/litellm.png";
@@ -58,6 +59,7 @@ import OpenRouterOptions from "@/components/LLMSelection/OpenRouterOptions";
 import GroqAiOptions from "@/components/LLMSelection/GroqAiOptions";
 import CohereAiOptions from "@/components/LLMSelection/CohereAiOptions";
 import KoboldCPPOptions from "@/components/LLMSelection/KoboldCPPOptions";
+import LlamaCppLLMOptions from "@/components/LLMSelection/LlamaCppLLMOptions";
 import TextGenWebUIOptions from "@/components/LLMSelection/TextGenWebUIOptions";
 import LiteLLMOptions from "@/components/LLMSelection/LiteLLMOptions";
 import AWSBedrockLLMOptions from "@/components/LLMSelection/AwsBedrockLLMOptions";
@@ -230,6 +232,18 @@ export const AVAILABLE_LLM_PROVIDERS = [
       "KoboldCPPModelPref",
       "KoboldCPPBasePath",
       "KoboldCPPTokenLimit",
+    ],
+  },
+  {
+    name: "LlamaCpp",
+    value: "llamacpp",
+    logo: LlamaCppLogo,
+    options: (settings) => <LlamaCppLLMOptions settings={settings} />,
+    description: "Run local LLMs using Llama.cpp server.",
+    requiredConfig: [
+      "LlamaCppLLMModelPref",
+      "LlamaCppLLMBasePath",
+      "LlamaCppLLMTokenLimit",
     ],
   },
   {

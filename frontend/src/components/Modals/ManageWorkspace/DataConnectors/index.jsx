@@ -6,6 +6,7 @@ import GitlabOptions from "./Connectors/Gitlab";
 import YoutubeOptions from "./Connectors/Youtube";
 import ConfluenceOptions from "./Connectors/Confluence";
 import DrupalWikiOptions from "./Connectors/DrupalWiki";
+import DataServerOptions from "./Connectors/DataServer";
 import { useState } from "react";
 import ConnectorOption from "./ConnectorOption";
 import WebsiteDepthOptions from "./Connectors/WebsiteDepth";
@@ -60,6 +61,12 @@ export const getDataConnectors = (t) => ({
     image: ConnectorImages.paperlessNgx,
     description: "Import documents from your Paperless-ngx instance.",
     options: <PaperlessNgxOptions />,
+  },
+  dataserver: {
+    name: "NAS / SMB Share",
+    image: ConnectorImages.dataserver,
+    description: "Import files from network storage or SMB shares.",
+    options: <DataServerOptions />,
   },
 });
 

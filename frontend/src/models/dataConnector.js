@@ -228,6 +228,100 @@ const DataConnector = {
         });
     },
   },
+
+  dataserver: {
+    connect: async ({ nasshare, username, password, ignorePaths }) => {
+      return await fetch(`${API_BASE}/ext/dataserver/connect`, {
+        method: "POST",
+        headers: baseHeaders(),
+        body: JSON.stringify({ nasshare, username, password, ignorePaths }),
+      })
+        .then((res) => res.json())
+        .then((res) => {
+          if (!res.success) throw new Error(res.reason);
+          return { data: res, error: null };
+        })
+        .catch((e) => {
+          console.error(e);
+          return { data: null, error: e.message };
+        });
+    },
+
+    mount: async ({ nasshare, username, password, mountpoint, ignores }) => {
+      return await fetch(`${API_BASE}/ext/dataserver/mount`, {
+        method: "POST",
+        headers: baseHeaders(),
+        body: JSON.stringify({
+          nasshare,
+          username,
+          password,
+          mountpoint,
+          ignores,
+        }),
+      })
+        .then((res) => res.json())
+        .then((res) => {
+          if (!res.success) throw new Error(res.reason);
+          return { data: res, error: null };
+        })
+        .catch((e) => {
+          console.error(e);
+          return { data: null, error: e.message };
+        });
+    },
+
+    checkStatus: async ({ processId }) => {
+      return await fetch(
+        `${API_BASE}/ext/dataserver/checkStatus?processId=${processId}`,
+        {
+          method: "GET",
+          headers: baseHeaders(),
+        }
+      )
+        .then((res) => res.json())
+        .then((res) => {
+          return { data: res, error: null };
+        })
+        .catch((e) => {
+          console.error(e);
+          return { data: null, error: e.message };
+        });
+    },
+
+    cancel: async ({ processId }) => {
+      return await fetch(`${API_BASE}/ext/dataserver/cancel`, {
+        method: "POST",
+        headers: baseHeaders(),
+        body: JSON.stringify({ processId }),
+      })
+        .then((res) => res.json())
+        .then((res) => {
+          if (!res.success) throw new Error(res.reason);
+          return { data: res, error: null };
+        })
+        .catch((e) => {
+          console.error(e);
+          return { data: null, error: e.message };
+        });
+    },
+
+    collect: async function ({ nasshare, username, password, ignorePaths = [] }) {
+      return await fetch(`${API_BASE}/ext/dataserver/collect`, {
+        method: "POST",
+        headers: baseHeaders(),
+        body: JSON.stringify({ nasshare, username, password, ignorePaths }),
+      })
+        .then((res) => res.json())
+        .then((res) => {
+          if (!res.success) throw new Error(res.reason);
+          return { data: res.data, error: null };
+        })
+        .catch((e) => {
+          console.error(e);
+          return { data: null, error: e.message };
+        });
+    },
+  },
 };
 
 export default DataConnector;

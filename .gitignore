@@ -10,3 +10,7 @@ aws_cf_deploy_anything_llm.json
 yarn.lock
 *.bak
 .idea
+
+# SMB/NAS mount points
+mountpoint/*
+!mountpoint/README.md

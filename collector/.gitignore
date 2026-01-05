@@ -7,3 +7,7 @@ scripts
 .env.development
 .env.production
 .env.test
+
+# Cache directory
+storage/cache/*
+!storage/cache/README.md

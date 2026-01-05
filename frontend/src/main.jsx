@@ -62,6 +62,15 @@ const router = createBrowserRouter([
         },
       },
       {
+        path: "/search/image-search",
+        lazy: async () => {
+          const { default: ImageSearch } = await import(
+            "@/pages/Search/ImageSearch"
+          );
+          return { element: <PrivateRoute Component={ImageSearch} /> };
+        },
+      },
+      {
         path: "/accept-invite/:code",
         lazy: async () => {
           const { default: InvitePage } = await import("@/pages/Invite");

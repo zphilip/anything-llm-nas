@@ -151,6 +151,9 @@ function getLLMProvider({ provider = null, model = null } = {}) {
     case "localai":
       const { LocalAiLLM } = require("../AiProviders/localAi");
       return new LocalAiLLM(embedder, model);
+    case "llamacpp":
+      const { LlamaCppAILLM } = require("../AiProviders/llamacpp");
+      return new LlamaCppAILLM(embedder, model);
     case "ollama":
       const { OllamaAILLM } = require("../AiProviders/ollama");
       return new OllamaAILLM(embedder, model);
@@ -255,6 +258,9 @@ function getEmbeddingEngineSelection() {
     case "localai":
       const { LocalAiEmbedder } = require("../EmbeddingEngines/localAi");
       return new LocalAiEmbedder();
+    case "llamacpp":
+      const { LlamaCppEmbedder } = require("../EmbeddingEngines/llamacpp");
+      return new LlamaCppEmbedder();
     case "ollama":
       const { OllamaEmbedder } = require("../EmbeddingEngines/ollama");
       return new OllamaEmbedder();
@@ -316,6 +322,9 @@ function getLLMProviderClass({ provider = null } = {}) {
     case "localai":
       const { LocalAiLLM } = require("../AiProviders/localAi");
       return LocalAiLLM;
+    case "llamacpp":
+      const { LlamaCppAILLM } = require("../AiProviders/llamacpp");
+      return LlamaCppAILLM;
     case "ollama":
       const { OllamaAILLM } = require("../AiProviders/ollama");
       return OllamaAILLM;

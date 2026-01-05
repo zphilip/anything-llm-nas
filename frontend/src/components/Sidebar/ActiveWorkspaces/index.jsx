@@ -14,7 +14,10 @@ import { useMatch } from "react-router-dom";
 import { DragDropContext, Droppable, Draggable } from "react-beautiful-dnd";
 import showToast from "@/utils/toast";
 
-export default function ActiveWorkspaces() {
+export default function ActiveWorkspaces({
+  checkedWorkspaces = {},
+  onCheckboxChange = null,
+}) {
   const navigate = useNavigate();
   const { slug } = useParams();
   const [loading, setLoading] = useState(true);
@@ -129,6 +132,18 @@ export default function ActiveWorkspaces() {
                               />
                             </div>
                             <div className="flex items-center space-x-2 overflow-hidden flex-grow">
+                              {onCheckboxChange && (
+                                <input
+                                  type="checkbox"
+                                  checked={!!checkedWorkspaces[workspace.id]}
+                                  onChange={(e) => {
+                                    e.stopPropagation();
+                                    onCheckboxChange(workspace.id);
+                                  }}
+                                  className="flex-shrink-0"
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              )}
                               <div className="w-[130px] overflow-hidden">
                                 <p
                                   className={`

@@ -512,6 +512,13 @@ const SystemSettings = {
       LocalAiModelPref: process.env.LOCAL_AI_MODEL_PREF,
       LocalAiTokenLimit: process.env.LOCAL_AI_MODEL_TOKEN_LIMIT,
 
+      // LlamaCpp LLM Keys
+      LlamaCppLLMBasePath: process.env.LLAMACPP_BASE_PATH,
+      LlamaCppLLMModelPref: process.env.LLAMACPP_MODEL_PREF,
+      LlamaCppLLMTokenLimit: process.env.LLAMACPP_MODEL_TOKEN_LIMIT,
+      LlamaCppLLMKeepAliveSeconds: process.env.LLAMACPP_KEEP_ALIVE_TIMEOUT ?? 300,
+      LlamaCppLLMPerformanceMode: process.env.LLAMACPP_PERFORMANCE_MODE ?? "base",
+
       // Ollama LLM Keys
       OllamaLLMAuthToken: !!process.env.OLLAMA_AUTH_TOKEN,
       OllamaLLMBasePath: process.env.OLLAMA_BASE_PATH,

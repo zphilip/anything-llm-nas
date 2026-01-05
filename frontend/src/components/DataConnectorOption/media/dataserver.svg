@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
+  <!-- Server body -->
+  <rect x="8" y="10" width="32" height="28" rx="2" fill="#4A5568" stroke="#2D3748" stroke-width="2"/>
+  
+  <!-- Top server section -->
+  <rect x="8" y="10" width="32" height="8" rx="2" fill="#718096"/>
+  <circle cx="14" cy="14" r="1.5" fill="#48BB78"/>
+  <circle cx="18" cy="14" r="1.5" fill="#F56565"/>
+  <line x1="24" y1="13" x2="36" y2="13" stroke="#E2E8F0" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="24" y1="15" x2="34" y2="15" stroke="#E2E8F0" stroke-width="1.5" stroke-linecap="round"/>
+  
+  <!-- Middle server section -->
+  <rect x="8" y="20" width="32" height="8" rx="0" fill="#718096"/>
+  <circle cx="14" cy="24" r="1.5" fill="#48BB78"/>
+  <circle cx="18" cy="24" r="1.5" fill="#F56565"/>
+  <line x1="24" y1="23" x2="36" y2="23" stroke="#E2E8F0" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="24" y1="25" x2="34" y2="25" stroke="#E2E8F0" stroke-width="1.5" stroke-linecap="round"/>
+  
+  <!-- Bottom server section -->
+  <rect x="8" y="30" width="32" height="8" rx="0" fill="#718096"/>
+  <circle cx="14" cy="34" r="1.5" fill="#48BB78"/>
+  <circle cx="18" cy="34" r="1.5" fill="#F56565"/>
+  <line x1="24" y1="33" x2="36" y2="33" stroke="#E2E8F0" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="24" y1="35" x2="34" y2="35" stroke="#E2E8F0" stroke-width="1.5" stroke-linecap="round"/>
+  
+  <!-- Network connection icon -->
+  <circle cx="40" cy="40" r="6" fill="#3182CE"/>
+  <path d="M37 40h6M40 37v6" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+</svg>

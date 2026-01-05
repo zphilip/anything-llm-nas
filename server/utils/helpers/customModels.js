@@ -18,6 +18,7 @@ const SUPPORT_CUSTOM_MODELS = [
   "openai",
   "anthropic",
   "localai",
+  "llamacpp",
   "ollama",
   "togetherai",
   "fireworksai",
@@ -59,8 +60,8 @@ async function getCustomModels(provider = "", apiKey = null, basePath = null) {
     case "anthropic":
       return await anthropicModels(apiKey);
     case "localai":
-      return await localAIModels(basePath, apiKey);
-    case "ollama":
+      return await localAIModels(basePath, apiKey);    case "llamacpp":
+      return await llamacppAIModels(basePath);    case "ollama":
       return await ollamaAIModels(basePath, apiKey);
     case "togetherai":
       return await getTogetherAiModels(apiKey);
@@ -364,6 +365,50 @@ async function getKoboldCPPModels(basePath = null) {
   } catch (e) {
     console.error(`KoboldCPP:getKoboldCPPModels`, e.message);
     return { models: [], error: "Could not fetch KoboldCPP Models" };
+  }
+}
+
+async function llamacppAIModels(basePath = null) {
+  let url;
+  try {
+    let urlPath = basePath ?? process.env.LLAMACPP_BASE_PATH;
+    new URL(urlPath);
+    if (urlPath.split("").slice(-1)?.[0] === "/")
+      throw new Error("BasePath Cannot end in /!");
+    url = urlPath;
+  } catch {
+    return { models: [], error: "Not a valid URL." };
+  }
+  
+  try {
+    const response = await fetch(`${url}/v1/models`);
+    if (!response.ok) {
+      throw new Error(`LlamaCPP server error: ${response.status}`);
+    }
+
+    // Safely parse the response
+    const responseText = await response.text();
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error("Failed to parse JSON:", responseText.substring(0, 200));
+      throw new Error(`Invalid JSON response: ${parseError.message}`);
+    }
+
+    // Handle the data
+    if (!data || !data.data) {
+      console.warn("Unexpected response format:", data);
+      return { models: [], error: "Unexpected response format" };
+    }
+
+    const modelList = data.data;
+    const models = modelList.map(model => ({ id: model.id }));
+
+    return { models, error: null };
+  } catch (error) {
+    console.error(`LlamaCPP API error: ${error.message}`);
+    return { models: [], error: error.message };
   }
 }
 

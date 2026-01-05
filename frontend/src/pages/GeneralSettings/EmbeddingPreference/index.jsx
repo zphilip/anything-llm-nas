@@ -8,6 +8,7 @@ import OpenAiLogo from "@/media/llmprovider/openai.png";
 import AzureOpenAiLogo from "@/media/llmprovider/azure.png";
 import GeminiAiLogo from "@/media/llmprovider/gemini.png";
 import LocalAiLogo from "@/media/llmprovider/localai.png";
+import LlamaCppLogo from "@/media/llmprovider/Llama1-logo.svg";
 import OllamaLogo from "@/media/llmprovider/ollama.png";
 import LMStudioLogo from "@/media/llmprovider/lmstudio.png";
 import CohereLogo from "@/media/llmprovider/cohere.png";
@@ -23,6 +24,7 @@ import OpenAiOptions from "@/components/EmbeddingSelection/OpenAiOptions";
 import AzureAiOptions from "@/components/EmbeddingSelection/AzureAiOptions";
 import GeminiOptions from "@/components/EmbeddingSelection/GeminiOptions";
 import LocalAiOptions from "@/components/EmbeddingSelection/LocalAiOptions";
+import LlamaCppEmbeddingOptions from "@/components/EmbeddingSelection/LlamaCppOptions";
 import NativeEmbeddingOptions from "@/components/EmbeddingSelection/NativeEmbeddingOptions";
 import OllamaEmbeddingOptions from "@/components/EmbeddingSelection/OllamaOptions";
 import LMStudioEmbeddingOptions from "@/components/EmbeddingSelection/LMStudioOptions";
@@ -76,6 +78,13 @@ const EMBEDDERS = [
     logo: LocalAiLogo,
     options: (settings) => <LocalAiOptions settings={settings} />,
     description: "Run embedding models locally on your own machine.",
+  },
+  {
+    name: "Llama.cpp",
+    value: "llamacpp",
+    logo: LlamaCppLogo,
+    options: (settings) => <LlamaCppEmbeddingOptions settings={settings} />,
+    description: "Run embedding models using Llama.cpp server.",
   },
   {
     name: "Ollama",
