@@ -116,6 +116,17 @@ if (process.env.NODE_ENV !== "development") {
     return;
   });
 } else {
+  // In development mode, proxy to frontend dev server
+  const { createProxyMiddleware } = require("http-proxy-middleware");
+  const frontendDevServer = process.env.FRONTEND_DEV_SERVER || "http://localhost:3000";
+  
+  // Proxy all non-API requests to the frontend dev server
+  app.use("/", createProxyMiddleware({ 
+    target: frontendDevServer, 
+    changeOrigin: true,
+    ws: true
+  }));
+
   // Debug route for development connections to vectorDBs
   apiRouter.post("/v/:command", async (request, response) => {
     try {
@@ -143,6 +154,11 @@ if (process.env.NODE_ENV !== "development") {
       console.error(e.message, e);
       response.sendStatus(500).end();
     }
+  });
+
+  app.get("/robots.txt", function (_, response) {
+    response.type("text/plain");
+    response.send("User-agent: *\nDisallow: /").end();
   });
 }
 

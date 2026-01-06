@@ -116,7 +116,7 @@ const KEY_MAPPING = {
   // LlamaCpp LLM Settings
   LlamaCppLLMBasePath: {
     envKey: "LLAMACPP_BASE_PATH",
-    checks: [isNotEmpty, validLLMExternalBasePath, validDockerizedUrl],
+    checks: [isNotEmpty, validLlamaCppLLMBasePath, validDockerizedUrl],
   },
   LlamaCppLLMModelPref: {
     envKey: "LLAMACPP_MODEL_PREF",
@@ -859,6 +859,17 @@ function validLLMExternalBasePath(input = "") {
 }
 
 function validOllamaLLMBasePath(input = "") {
+  try {
+    new URL(input);
+    if (input.split("").slice(-1)?.[0] === "/")
+      return "URL cannot end with a slash";
+    return null;
+  } catch {
+    return "Not a valid URL";
+  }
+}
+
+function validLlamaCppLLMBasePath(input = "") {
   try {
     new URL(input);
     if (input.split("").slice(-1)?.[0] === "/")

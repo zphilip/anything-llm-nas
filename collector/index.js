@@ -14,6 +14,7 @@ const { processLink, getLinkText } = require("./processLink");
 const { wipeCollectorStorage } = require("./utils/files");
 const extensions = require("./extensions");
 const { processRawText } = require("./processRawText");
+const { processFiles } = require("./processFiles");
 const { verifyPayloadIntegrity } = require("./middleware/verifyIntegrity");
 const { httpLogger } = require("./middleware/httpLogger");
 const { v4: uuidv4 } = require('uuid');
@@ -195,6 +196,52 @@ app.post(
 );
 
 // SMB/NAS Share Endpoints
+app.post(
+  "/processNASShare",
+  [verifyPayloadIntegrity],
+  async function (request, response) {
+    const { nasshare, username, password, ignorePaths } = reqBody(request);
+    
+    const processId = uuidv4();
+    activeProcesses.set(processId, { 
+      status: 'started', 
+      progress: 0, 
+      shouldStop: false, 
+      result: null, 
+      timestamp: Date.now() 
+    });
+    console.log(`Starting process with ID: ${processId}`);
+
+    try {
+      if (!nasshare || !username || !password) {
+        return response.status(400).json({
+          success: false,
+          reason: "Missing required fields: username, password, or nasshare.",
+          documents: [],
+        });
+      }
+
+      processFiles(processId, activeProcesses, nasshare, username, password, ignorePaths);
+      
+      response.status(200).json({ 
+        nasshare, 
+        processId, 
+        success: true 
+      });
+    } catch (e) {
+      console.error(e);
+      response.status(200).json({
+        nasshare,
+        processId,
+        success: false,
+        reason: "A processing error occurred.",
+        documents: [],
+      });
+    }
+    return;
+  }
+);
+
 app.post(
   "/mountNASShare",
   [verifyPayloadIntegrity],
