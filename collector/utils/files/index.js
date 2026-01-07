@@ -351,12 +351,67 @@ async function handleLocalFilesCache(data = {}, operation = 'read') {
   }
 }
 
+/**
+ * Writes image data to server storage as JSON file
+ * @param {Object} data - Image data including imageBuffer and extension
+ * @param {string} filename - Name of the file
+ * @param {string} destinationOverride - Optional custom destination path
+ * @returns {Object} - Image data with location and fullPath
+ */
+async function writeImageToServer(data = {}, filename, destinationOverride = null) {
+  const { imageBuffer, extension } = data; // Destructure data object
+  const destination = destinationOverride
+    ? path.resolve(destinationOverride)
+    : path.resolve(
+        __dirname,
+        "../../../server/storage/documents/custom-documents"
+      );
+
+  // Ensure the destination directory exists
+  if (!fs.existsSync(destination)) {
+    fs.mkdirSync(destination, { recursive: true });
+  }
+
+  // Construct the full file path
+  const destinationFilePath = path.resolve(destination, filename) + ".json";
+
+  // Write the image data as JSON
+  fs.writeFileSync(destinationFilePath, JSON.stringify(data, null, 4), {
+    encoding: "utf-8",
+  });
+  console.log(`Image saved to ${destinationFilePath}`);
+
+  const result = {
+    ...data,
+    // relative location string that can be passed into the /update-embeddings api
+    // that will work since we know the location exists and since we only allow
+    // 1-level deep folders this will always work. This still works for integrations like GitHub and YouTube.
+    location: destinationFilePath.split("/").slice(-2).join("/"),
+    fullPath: destinationFilePath,
+  };
+
+  // Save metadata to Redis if available
+  if (redisHelper) {
+    try {
+      const folderName = destination.split("/").pop(); // Get folder name (e.g., "custom-documents")
+      const fileName = filename + ".json";
+      await redisHelper.saveFileMetadata(folderName, fileName, result);
+      console.log(`📡 Saved metadata to Redis for ${folderName}/${fileName}`);
+    } catch (error) {
+      console.error('Error saving metadata to Redis:', error.message);
+    }
+  }
+
+  return result;
+}
+
 module.exports = {
   trashFile,
   isTextType,
   createdDate,
   writeToServerDocuments,
   writeToServerDocumentsWithChunks,
+  writeImageToServer,
   handleLocalFilesCache,
   wipeCollectorStorage,
   normalizePath,

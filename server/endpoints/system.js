@@ -471,9 +471,24 @@ function systemEndpoints(app) {
   app.get(
     "/system/local-files",
     [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
-    async (_, response) => {
+    async (request, response) => {
       try {
-        const localFiles = await viewLocalFiles();
+        // Check for rescan parameter (explicit check for string 'true')
+        const rescan = request.query.rescan === 'true';
+        console.log('📂 Fetching local files, rescan:', rescan);
+        
+        const localFiles = await viewLocalFiles(rescan);
+        
+        // Save to Redis if available
+        if (global.redisHelper) {
+          try {
+            await global.redisHelper.saveDirectoryData(localFiles);
+            console.log('✅ Directory data saved to Redis');
+          } catch (redisError) {
+            console.warn('⚠️ Failed to save to Redis:', redisError.message);
+          }
+        }
+        
         response.status(200).json({ localFiles });
       } catch (e) {
         console.error(e.message, e);

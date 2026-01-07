@@ -34,6 +34,8 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
         mv /root/.local/bin/uv /usr/local/bin/uv && \
         mv /root/.local/bin/uvx /usr/local/bin/uvx && \
         echo "Installed uvx! $(uv --version)" && \
+    # Install SMB client and dcraw for data connector support
+    apt-get install -yq --no-install-recommends smbclient dcraw && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -103,6 +105,8 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
         mv /root/.local/bin/uv /usr/local/bin/uv && \
         mv /root/.local/bin/uvx /usr/local/bin/uvx && \
         echo "Installed uvx! $(uv --version)" && \
+    # Install SMB client and dcraw for data connector support
+    apt-get install -yq --no-install-recommends smbclient dcraw && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

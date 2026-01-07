@@ -1,18 +1,9 @@
-const { 
-  AutoProcessor,
-  AutoTokenizer,
-  CLIPVisionModelWithProjection, 
-  CLIPTextModelWithProjection, 
-  RawImage } = require('@huggingface/transformers'); // Hypothetical library or implementation
-
-const tokenizerPromise = AutoTokenizer.from_pretrained('Xenova/clip-vit-base-patch16');
-const textModelPromise = CLIPTextModelWithProjection.from_pretrained('Xenova/clip-vit-base-patch16');
-const processorPromise = AutoProcessor.from_pretrained('Xenova/clip-vit-base-patch16');
-const visionModelPromise = CLIPVisionModelWithProjection.from_pretrained('Xenova/clip-vit-base-patch16');
+// HuggingFace transformers models are not currently used in this implementation
+// The LlamaCpp embedder uses the llamacpp-python server's embedding endpoint instead
+// If you need to use HuggingFace models in the future, initialize them lazily in the methods that need them
   
 const { maximumChunkLength } = require("../../helpers");
 const path = require("path");
-const modelID = 'Xenova/clip-vit-base-patch16';
 
 class LlamaCppEmbedder {
   constructor() {

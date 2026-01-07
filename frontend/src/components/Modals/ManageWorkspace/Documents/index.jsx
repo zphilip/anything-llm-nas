@@ -26,9 +26,19 @@ export default function DocumentSettings({ workspace, systemSettings }) {
   const [embeddingsCost, setEmbeddingsCost] = useState(0);
   const [loadingMessage, setLoadingMessage] = useState("");
 
-  async function fetchKeys(refetchWorkspace = false) {
+  async function fetchKeys(refetchWorkspace = false, rescan = false) {
     setLoading(true);
-    const localFiles = await System.localFiles();
+    const localFiles = await System.localFiles(rescan);
+    
+    // Add null check for localFiles
+    if (!localFiles || !localFiles.items) {
+      console.warn('No local files found or invalid structure');
+      setAvailableDocs({ name: "documents", type: "folder", items: [] });
+      setWorkspaceDocs({ name: "documents", type: "folder", items: [] });
+      setLoading(false);
+      return;
+    }
+    
     const currentWorkspace = refetchWorkspace
       ? await Workspace.bySlug(workspace.slug)
       : workspace;

@@ -8,7 +8,8 @@ const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const { pipeline } = require('@huggingface/transformers');
+// Lazy load transformers to avoid startup issues if HuggingFace is unreachable
+// const { pipeline } = require('@huggingface/transformers');
 //const {detectLanguage} = require("./translate");
 
 class LlamaCppAILLM {

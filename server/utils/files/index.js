@@ -20,6 +20,12 @@ const hotdirPath =
     ? path.resolve(__dirname, `../../../collector/hotdir`)
     : path.resolve(process.env.STORAGE_DIR, `../../collector/hotdir`);
 
+// Cache file for storing directory structure
+const CACHE_FILE = path.join(__dirname, '../../storage/cache/localFiles.json');
+
+// Batch size for processing files
+const BATCH_SIZE = 100;
+
 // Should take in a folder that is a subfolder of documents
 // eg: youtube-subject/video-123.json
 async function fileData(filePath = null) {
@@ -32,20 +38,38 @@ async function fileData(filePath = null) {
   return JSON.parse(data);
 }
 
-async function viewLocalFiles() {
-  if (!fs.existsSync(documentsPath)) fs.mkdirSync(documentsPath);
-  const liveSyncAvailable = await DocumentSyncQueue.enabled();
-  const directory = {
-    name: "documents",
-    type: "folder",
-    items: [],
-  };
+async function viewLocalFiles(rescan = false) {
+  try {
+    // Create cache directory if it doesn't exist
+    const cacheDir = path.dirname(CACHE_FILE);
+    if (!fs.existsSync(cacheDir)) {
+      fs.mkdirSync(cacheDir, { recursive: true });
+    }
+    
+    // Try to read from cache if rescan is false
+    if (!rescan && fs.existsSync(CACHE_FILE)) {
+      try {
+        const cachedData = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+        console.log('✅ Loaded directory structure from cache');
+        return cachedData;
+      } catch (error) {
+        console.warn('⚠️ Error reading cache file, rescanning:', error.message);
+      }
+    }
+    
+    if (!fs.existsSync(documentsPath)) fs.mkdirSync(documentsPath);
+    const liveSyncAvailable = await DocumentSyncQueue.enabled();
+    const directory = {
+      name: "documents",
+      type: "folder",
+      items: [],
+    };
 
-  for (const file of fs.readdirSync(documentsPath)) {
-    if (path.extname(file) === ".md") continue;
-    const folderPath = path.resolve(documentsPath, file);
-    const isFolder = fs.lstatSync(folderPath).isDirectory();
-    if (isFolder) {
+    for (const file of fs.readdirSync(documentsPath)) {
+      if (path.extname(file) === ".md") continue;
+      const folderPath = path.resolve(documentsPath, file);
+      const isFolder = fs.lstatSync(folderPath).isDirectory();
+      if (isFolder) {
       const subdocs = {
         name: file,
         type: "folder",
@@ -96,7 +120,19 @@ async function viewLocalFiles() {
     ...directory.items.filter((folder) => folder.name !== "custom-documents"),
   ].filter((i) => !!i);
 
+  // Save to cache file
+  try {
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(directory, null, 2), 'utf8');
+    console.log('💾 Directory structure saved to cache');
+  } catch (error) {
+    console.error('❌ Error saving cache file:', error.message);
+  }
+
   return directory;
+  } catch (error) {
+    console.error("❌ Error in viewLocalFiles:", error);
+    throw error;
+  }
 }
 
 /**
@@ -484,6 +520,161 @@ function hasRequiredMetadata(metadata = {}) {
   );
 }
 
+/**
+ * Processes a single file asynchronously.
+ * @param {string} folderPath - The path to the folder containing the file
+ * @param {string} folderName - The name of the folder
+ * @param {string} fileName - The name of the file
+ * @param {boolean} liveSyncAvailable - Whether live sync is available
+ * @returns {Promise<object|null>} - The processed file object or null if processing failed
+ */
+async function processSingleFile(folderPath, folderName, fileName, liveSyncAvailable) {
+  try {
+    const filePath = path.join(folderPath, fileName);
+    const cacheFilename = `${folderName}/${fileName}`;
+    
+    const [rawData, cached] = await Promise.all([
+      fs.promises.readFile(filePath, "utf8"),
+      cachedVectorInformation(cacheFilename, true)
+    ]);
+
+    let metadata;
+    try {
+      const parsed = JSON.parse(rawData);
+      const { pageContent, ...rest } = parsed;
+      metadata = rest;
+    } catch (parseError) {
+      console.error(`JSON parse error for ${fileName}:`, parseError);
+      return null;
+    }
+
+    const result = {
+      name: fileName,
+      type: "file",
+      ...metadata,
+      cached,
+      canWatch: liveSyncAvailable ? DocumentSyncQueue.canWatch(metadata) : false,
+    };
+
+    return result;
+  } catch (err) {
+    console.error(`Error processing ${fileName}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Processes files in batches with pinned workspaces and watched documents info.
+ * @param {Array} batch - Array of file objects to process
+ * @param {object} filenames - Mapping of cache filenames to actual filenames
+ * @param {object} subdocs - The subdirectory object to add items to
+ */
+async function processBatch(batch, filenames, subdocs) {
+  // Batch fetch workspace and watch information
+  const [pinnedWorkspaces, watchedDocs] = await Promise.all([
+    getPinnedWorkspacesByDocument(filenames),
+    getWatchedDocumentFilenames(filenames)
+  ]);
+
+  // Update items with pinned and watched information
+  batch.forEach(item => {
+    item.pinnedWorkspaces = pinnedWorkspaces[item.name] || [];
+    item.watched = watchedDocs.hasOwnProperty(item.name) || false;
+    subdocs.items.push(item);
+  });
+}
+
+/**
+ * Views files from Redis metadata - processes specific files based on Redis metadata.
+ * This is used when files are processed by the collector and metadata is stored in Redis.
+ * @param {string[]} filePaths - Array of file paths to process (e.g., ["folder/file.json"])
+ * @returns {Promise<object>} - Directory structure with processed files
+ */
+async function viewRedisFiles(filePaths = []) {
+  try {
+    // Check if the input is a valid non-empty array
+    if (!Array.isArray(filePaths) || filePaths.length === 0) {
+      throw new Error("File paths must be provided as a non-empty array");
+    }
+
+    // Initialize the base directory structure
+    let directory = {
+      name: "documents",
+      type: "folder",
+      items: []
+    };
+
+    // Check if live sync is available
+    const liveSyncAvailable = await DocumentSyncQueue.enabled();
+
+    // Group files by their parent folder
+    const folderGroups = filePaths.reduce((groups, filePath) => {
+      const normalizedPath = normalizePath(filePath);
+      const folderName = path.dirname(normalizedPath);
+      if (!groups[folderName]) {
+        groups[folderName] = [];
+      }
+      groups[folderName].push(path.basename(normalizedPath));
+      return groups;
+    }, {});
+
+    // Process each folder group
+    for (const [folderName, fileNames] of Object.entries(folderGroups)) {
+      try {
+        const folderPath = path.resolve(documentsPath, folderName);
+        
+        // If the folder doesn't exist, log a warning and continue
+        if (!fs.existsSync(folderPath)) {
+          console.warn(`Folder ${folderName} does not exist, skipping...`);
+          continue;
+        }
+
+        // Prepare a subdirectory for this folder
+        const subdocs = {
+          name: folderName,
+          type: "folder",
+          items: []
+        };
+
+        // Process files in batches
+        for (let i = 0; i < fileNames.length; i += BATCH_SIZE) {
+          const batch = fileNames.slice(i, i + BATCH_SIZE);
+          const fileTasks = batch.map(fileName => {
+            return processSingleFile(folderPath, folderName, fileName, liveSyncAvailable);
+          });
+
+          const processedFiles = (await Promise.all(fileTasks)).filter(Boolean);
+          
+          // Create a mapping for filenames
+          const filenamesMap = {};
+          processedFiles.forEach(file => {
+            filenamesMap[`${folderName}/${file.name}`] = file.name;
+          });
+
+          await processBatch(processedFiles, filenamesMap, subdocs);
+        }
+        
+        // Add or update the folder in the main directory structure
+        if (subdocs.items.length > 0) {
+          const existingIndex = directory.items.findIndex(item => item.name === folderName);
+          if (existingIndex !== -1) {
+            directory.items[existingIndex] = subdocs;
+          } else {
+            directory.items.push(subdocs);
+          }
+        }
+      } catch (err) {
+        console.error(`Error processing folder ${folderName}:`, err);
+      }
+    }
+
+    return directory;
+  } catch (error) {
+    console.error("Error in viewRedisFiles:", error);
+    throw error;
+  }
+}
+
 module.exports = {
   findDocumentInDocuments,
   cachedVectorInformation,
@@ -500,4 +691,5 @@ module.exports = {
   purgeEntireVectorCache,
   getDocumentsByFolder,
   hotdirPath,
+  viewRedisFiles,
 };

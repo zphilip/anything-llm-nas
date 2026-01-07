@@ -5,6 +5,17 @@ networks:
     driver: bridge
 
 services:
+  redis:
+    container_name: anything-redis
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - anything-llm
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+
   anything-llm:
     container_name: anythingllm
     build:
@@ -28,7 +39,15 @@ services:
       - "5001:3001"
     env_file:
       - .env
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     networks:
       - anything-llm
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      - redis
+
+volumes:
+  redis-data:

@@ -12,6 +12,7 @@ yarn.lock
 .idea
 processFiles/
 mountpoint/
+cache/
 # SMB/NAS mount points
 mountpoint/*
 !mountpoint/README.md

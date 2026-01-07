@@ -30,6 +30,21 @@ const { agentFlowEndpoints } = require("./endpoints/agentFlows");
 const { mcpServersEndpoints } = require("./endpoints/mcpServers");
 const { mobileEndpoints } = require("./endpoints/mobile");
 const { httpLogger } = require("./middleware/httpLogger");
+
+// Redis support (optional)
+let redisHelper = null;
+let handleFileAdd = null;
+try {
+  const { redisHelper: helper } = require("./utils/files/redis");
+  const { handleFileAdd: handler } = require("./jobs/redis-watched-documents");
+  redisHelper = helper;
+  handleFileAdd = handler;
+  global.redisHelper = helper; // Make it globally available
+  console.log("✅ Redis support enabled");
+} catch (e) {
+  console.log("⚠️ Redis support disabled:", e.message);
+}
+
 const app = express();
 const apiRouter = express.Router();
 const FILE_LIMIT = "3GB";
@@ -166,6 +181,19 @@ app.all("*", function (_, response) {
   response.sendStatus(404);
 });
 
-// In non-https mode we need to boot at the end since the server has not yet
-// started and is `.listen`ing.
-if (!process.env.ENABLE_HTTPS) bootHTTP(app, process.env.SERVER_PORT || 3001);
+// Initialize Redis before starting the server (if available)
+(async () => {
+  if (redisHelper && handleFileAdd) {
+    try {
+      await redisHelper.connect();
+      await redisHelper.loadCacheFileToRedis();
+      await redisHelper.subscribeToUpdates("file:metadata:updates", handleFileAdd);
+      console.log("✅ Redis initialized and subscribed to file updates");
+    } catch (error) {
+      console.error("❌ Redis initialization failed:", error.message);
+    }
+  }
+
+  // Boot the HTTP server
+  if (!process.env.ENABLE_HTTPS) bootHTTP(app, process.env.SERVER_PORT || 3001);
+})();

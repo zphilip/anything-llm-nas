@@ -41,8 +41,9 @@ const System = {
       .then((res) => res.results)
       .catch(() => null);
   },
-  localFiles: async function () {
-    return await fetch(`${API_BASE}/system/local-files`, {
+  localFiles: async function (rescan = false) {
+    const url = `${API_BASE}/system/local-files${rescan ? '?rescan=true' : ''}`;
+    return await fetch(url, {
       headers: baseHeaders(),
     })
       .then((res) => {
