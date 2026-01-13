@@ -1,112 +1,58 @@
-import { pipeline, env } from "@xenova/transformers";
+// Import Search model for API calls
+import Search from "@/models/search";
 
-// Configure environment
-env.allowLocalModels = false;
-env.useBrowserCache = true;
+const DISTANCE = {
+  EUCLIDEAN: "l2",
+  COSINE: "cosine",
+  DOT: "dot"
+};
 
-// Global pipeline instance
-let embedPipeline = null;
-
-// Initialize the pipeline
-async function initializePipeline(
-  modelName = "Xenova/all-MiniLM-L6-v2"
-) {
-  if (!embedPipeline) {
-    console.log("Initializing embedding model:", modelName);
-    self.postMessage({ status: "initiate" });
-    try {
-      embedPipeline = await pipeline("feature-extraction", modelName);
-      self.postMessage({ status: "ready" });
-    } catch (error) {
-      console.error("Failed to initialize pipeline:", error);
-      self.postMessage({ status: "error", error: error.message });
-    }
+// Simulate computation to show worker is ready
+function simulateHeavyComputation() {
+  let result = 0;
+  for (let i = 0; i < 1000000000; i++) {
+    result += i;
   }
-  return embedPipeline;
-}
-
-// Generate embeddings and search
-async function performSearch(
-  text,
-  namespaces,
-  distanceMetric,
-  headers,
-  searchId,
-  limit = 20,
-  threshold = 0.5
-) {
-  try {
-    const pipe = await initializePipeline();
-
-    if (!pipe) {
-      throw new Error("Pipeline not initialized");
-    }
-
-    // Generate embedding
-    const embedding = await pipe(text, {
-      pooling: "mean",
-      normalize: true,
-    });
-    const embeddingArray = Array.from(embedding.data);
-
-    // Call backend search API
-    const apiBase = self.location.origin;
-    const response = await fetch(`${apiBase}/api/search/text`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...headers,
-      },
-      body: JSON.stringify({
-        search: text,
-        embedding: embeddingArray,
-        namespaces,
-        distanceMetric,
-        limit,
-        threshold,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Search failed: ${response.statusText}`);
-    }
-
-    const results = await response.json();
-
-    self.postMessage({
-      status: "complete",
-      output: results.results || results,
-      searchId,
-    });
-  } catch (error) {
-    console.error("Worker error:", error);
-    self.postMessage({
-      status: "error",
-      error: error.message,
-      searchId,
-    });
-  }
+  return result;
 }
 
 // Listen for messages from main thread
-self.addEventListener("message", async (event) => {
-  const {
-    text,
-    namespaces,
-    distanceMetric,
-    headers,
-    searchId,
-    limit,
-    threshold,
-  } = event.data;
+self.onmessage = async function(event) {
+  const { text, distanceMetric, headers, namespaces, searchId } = event.data;
+  
+  // Perform some heavy computation (simulated)
+  const sim_result = simulateHeavyComputation();
 
-  await performSearch(
-    text,
-    namespaces,
-    distanceMetric,
-    headers,
-    searchId,
-    limit,
-    threshold
+  // Send a message back to the main script
+  self.postMessage(`==Result from Web Worker: ${sim_result}`);
+  // Send the output back to the main thread
+  self.postMessage({ status: 'ready' });
+  
+  // Search images with the provided namespaces
+  let threshold = 0.5; // default threshold
+  if (distanceMetric === DISTANCE.COSINE) {
+      threshold = 0.2;
+  } else if (distanceMetric === DISTANCE.EUCLIDEAN) {
+      threshold = 500;
+  }
+  
+  const result = await Search.searchText(
+      text,
+      namespaces,
+      200, // default limit
+      threshold,
+      distanceMetric,
+      headers // Pass headers to searchText        
   );
-});
+
+  console.log("[Worker] Search completed, results:", result?.length || 0, "items");
+  console.log("[Worker] First result:", result?.[0]);
+
+  let images = result;
+  // Send the output back to the main thread
+  self.postMessage({
+      status: 'complete',
+      output: images,
+      searchId: searchId  // Return the searchId to match requests
+  });
+};

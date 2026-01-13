@@ -29,6 +29,7 @@ const { communityHubEndpoints } = require("./endpoints/communityHub");
 const { agentFlowEndpoints } = require("./endpoints/agentFlows");
 const { mcpServersEndpoints } = require("./endpoints/mcpServers");
 const { mobileEndpoints } = require("./endpoints/mobile");
+const { searchEndpoints } = require("./endpoints/search");
 const { httpLogger } = require("./middleware/httpLogger");
 
 // Redis support (optional)
@@ -94,12 +95,24 @@ communityHubEndpoints(apiRouter);
 agentFlowEndpoints(apiRouter);
 mcpServersEndpoints(apiRouter);
 mobileEndpoints(apiRouter);
+searchEndpoints(apiRouter);
 
 // Externally facing embedder endpoints
 embeddedEndpoints(apiRouter);
 
 // Externally facing browser extension endpoints
 browserExtensionEndpoints(apiRouter);
+
+// Serve document storage files (for image base64 JSON files)
+app.use(
+  "/documents",
+  express.static(path.resolve(__dirname, "storage/documents"), {
+    setHeaders: (res) => {
+      res.removeHeader("X-Powered-By");
+      res.setHeader("Content-Type", "application/json");
+    },
+  })
+);
 
 if (process.env.NODE_ENV !== "development") {
   const { MetaGenerator } = require("./utils/boot/MetaGenerator");

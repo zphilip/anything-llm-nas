@@ -1,11 +1,33 @@
 const lancedb = require("@lancedb/lancedb");
-const { toChunks, getEmbeddingEngineSelection } = require("../../helpers");
+const { toChunks, getEmbeddingEngineSelection, getLLMProvider } = require("../../helpers");
 const { TextSplitter } = require("../../TextSplitter");
 const { SystemSettings } = require("../../../models/systemSettings");
 const { storeVectorResult, cachedVectorInformation } = require("../../files");
 const { v4: uuidv4 } = require("uuid");
 const { sourceIdentifier } = require("../../chats");
 const { NativeEmbeddingReranker } = require("../../EmbeddingRerankers/native");
+const path = require('path');
+
+/**
+ * Checks if the given input is an image based on its file extension.
+ * @param {string} input - The file path or URL to check.
+ * @returns {boolean} - Returns true if the input is an image, false otherwise.
+ */
+const isImage = function (input) {
+  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp'];
+  if (typeof input !== 'string') return false;
+  const lowerInput = input.toLowerCase();
+  return imageExtensions.some(extension => lowerInput.endsWith(extension));
+};
+
+/**
+ * Removes UUID and .json extension from file path
+ * @param {string} fullfilepath - The full file path
+ * @returns {string} - The cleaned file path
+ */
+function removeUuidAndJson(fullfilepath) {
+  return fullfilepath.replace(/-\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b\.json$/, '');
+}
 
 /**
  * LancedDB Client connection object
@@ -172,8 +194,12 @@ const LanceDb = {
       .limit(topN)
       .toArray();
 
-    response.forEach((item) => {
-      if (this.distanceToSimilarity(item._distance) < similarityThreshold)
+    response.forEach((item, index) => {
+      const similarity = this.distanceToSimilarity(item._distance);
+      if (index < 5) {
+        console.log(`  [Result ${index}] Distance: ${item._distance}, Similarity: ${similarity}`);
+      }
+      if (similarity < similarityThreshold)
         return;
       const { vector: _, ...rest } = item;
       if (filterIdentifiers.includes(sourceIdentifier(rest))) {
@@ -186,13 +212,90 @@ const LanceDb = {
       result.contextTexts.push(rest.text);
       result.sourceDocuments.push({
         ...rest,
-        score: this.distanceToSimilarity(item._distance),
+        score: similarity,
       });
-      result.scores.push(this.distanceToSimilarity(item._distance));
+      result.scores.push(similarity);
     });
+    console.log(`  Total results after filtering: ${result.contextTexts.length}`);
 
     return result;
   },
+
+  /**
+   * Performs a distance-based search using L2 (Euclidean) distance.
+   * @param {LanceClient} client
+   * @param {string} namespace
+   * @param {number[]} queryVector
+   * @param {number} distanceThreshold
+   * @param {number} topN
+   * @param {string[]} filterIdentifiers
+   * @returns
+   */
+  distanceResponse: async function (
+    client,
+    namespace,
+    queryVector,
+    distanceThreshold = 1.0,
+    topN = 4,
+    filterIdentifiers = []
+  ) {
+    const collection = await client.openTable(namespace);
+    const result = {
+      contextTexts: [],
+      sourceDocuments: [],
+      scores: [],
+    };
+
+    const response = await collection
+      .vectorSearch(queryVector)
+      .distanceType("l2")
+      .limit(topN * 2)
+      .toArray();
+
+    if (response.some(item => isNaN(item._distance))) {
+      console.warn("LanceDB returned NaN distances. Ensure your vectors are normalized.");
+    }
+
+    response.forEach((item, index) => {
+      if (index < 5) {
+        console.log(`  [Result ${index}] L2 Distance: ${item._distance}`);
+      }
+      // For L2 distance, lower values are better (opposite of similarity)
+      // Only include items with distance LESS than the threshold
+      if (item._distance > distanceThreshold)
+        return;
+      
+      const { vector: _, ...rest } = item;
+      if (filterIdentifiers.includes(sourceIdentifier(rest))) {
+        console.log(
+          "LanceDB: A source was filtered from context as its parent document is pinned."
+        );
+        return;
+      }
+
+      result.contextTexts.push(rest.text);
+      result.sourceDocuments.push({
+        ...rest,
+        score: item._distance, // Use raw L2 distance score
+      });
+      result.scores.push(item._distance);
+    });
+    console.log(`  Total results after filtering: ${result.contextTexts.length}`);
+
+    // Sort by distance (ascending - smaller distances are better)
+    const indices = result.scores
+      .map((score, index) => ({ score, index }))
+      .sort((a, b) => a.score - b.score)
+      .slice(0, topN)
+      .map(item => item.index);
+    
+    return {
+      contextTexts: indices.map(i => result.contextTexts[i]),
+      sourceDocuments: indices.map(i => result.sourceDocuments[i]),
+      scores: indices.map(i => result.scores[i]),
+    };
+  },
+
   /**
    *
    * @param {LanceClient} client
@@ -313,6 +416,13 @@ const LanceDb = {
       // because we then cannot atomically control our namespace to granularly find/remove documents
       // from vectordb.
       const EmbedderEngine = getEmbeddingEngineSelection();
+      const imageDescribeEngine = getLLMProvider();
+      
+      // Extract the image path from fullFilePath
+      const imagePath = removeUuidAndJson(fullFilePath);
+      const fileType = isImage(imagePath) ? "image" : "text";
+      console.log("Extracted Image Path:", imagePath, "Type:", fileType);
+
       const textSplitter = new TextSplitter({
         chunkSize: TextSplitter.determineMaxChunkSize(
           await SystemSettings.getValueOrFallback({
@@ -327,6 +437,76 @@ const LanceDb = {
         chunkHeaderMeta: TextSplitter.buildHeaderMeta(metadata),
         chunkPrefix: EmbedderEngine?.embeddingPrefix,
       });
+
+      // Handle images differently - use LLM to describe, then embed the description
+      if (fileType === "image") {
+        console.log("Processing image file with LLM description...");
+        const documentVectors = [];
+        const imageVectors = []; // Add imageVectors array like mything-llm
+        const submissions = [];
+        
+        // Check if the LLM provider supports image description
+        if (typeof imageDescribeEngine.describeImages !== 'function') {
+          console.error(`addDocumentToNamespace: LLM provider does not support image description. Please use 'ollama' or 'llamacpp' for image vectorization.`);
+          return { 
+            vectorized: false, 
+            error: `LLM provider does not support image description. Please configure LLM_PROVIDER to 'ollama' or 'llamacpp' in your .env file.`
+          };
+        }
+        
+        // Get image description from LLM - use filename as fallback if description is missing
+        const fileDescription = metadata.description || metadata.title || fullFilePath.split('/').pop() || "Image file";
+        console.log("File description for image:", fileDescription);
+        
+        const imageDescriptions = await imageDescribeEngine.describeImages([pageContent], [fileDescription]);
+        const desc = imageDescriptions[0].description; // desc is already an array: [description, image_description]
+        
+        console.log("Description array:", desc);
+        
+        // Embed the description text - desc is already an array, don't wrap it again
+        const textEmbeddings = await EmbedderEngine.embedChunks(desc);
+        
+        if (!!textEmbeddings && textEmbeddings.length > 0) {
+          for (const [i, textEmbedding] of textEmbeddings.entries()) {
+            const id = uuidv4();
+            console.log("textEmbedding dimension:", textEmbedding.length);
+            
+            const vectorRecord = {
+              id: id,
+              values: textEmbedding,
+              metadata: { ...metadata, text: desc[i] },
+            };
+            
+            imageVectors.push(vectorRecord); // Push to imageVectors like mything-llm
+            submissions.push({
+              ...vectorRecord.metadata,
+              id: vectorRecord.id,
+              vector: vectorRecord.values,
+            });
+            documentVectors.push({ docId, vectorId: vectorRecord.id });
+          }
+        } else {
+          throw new Error(
+            "Could not embed image description! This document will not be recorded."
+          );
+        }
+        
+        const { client } = await this.connect();
+        
+        if (imageVectors.length > 0) {
+          const chunks = [];
+          for (const chunk of toChunks(imageVectors, 500)) chunks.push(chunk);
+
+          console.log("Inserting vectorized image into LanceDB collection.");
+          await this.updateOrCreateCollection(client, submissions, namespace);
+          await storeVectorResult(chunks, fullFilePath);
+        }
+        
+        await DocumentVectors.bulkInsert(documentVectors);
+        return { vectorized: true, error: null };
+      }
+
+      // Handle text documents normally
       const textChunks = await textSplitter.splitText(pageContent);
 
       console.log("Snippets created from document:", textChunks.length);
@@ -399,6 +579,13 @@ const LanceDb = {
     }
 
     const queryVector = await LLMConnector.embedTextInput(input);
+    console.log("[AnythingLLM DEBUG] performSimilaritySearch:");
+    console.log("  - Namespace:", namespace);
+    console.log("  - Search Input:", input);
+    console.log("  - Query Vector Dimension:", queryVector.length);
+    console.log("  - Query Vector (first 10):", queryVector.slice(0, 10));
+    console.log("  - Similarity Threshold:", similarityThreshold);
+    console.log("  - TopN:", topN);
     const result = rerank
       ? await this.rerankedSimilarityResponse({
           client,
@@ -428,6 +615,104 @@ const LanceDb = {
       message: false,
     };
   },
+
+  performDistanceSearch: async function ({
+    namespace = null,
+    input = "",
+    LLMConnector = null,
+    distanceThreshold = 1.0,
+    topN = 4,
+    filterIdentifiers = [],
+  }) {
+    if (!namespace || !input || !LLMConnector)
+      throw new Error("Invalid request to performDistanceSearch.");
+
+    const { client } = await this.connect();
+    if (!(await this.namespaceExists(client, namespace))) {
+      return {
+        contextTexts: [],
+        sources: [],
+        message: "Invalid query - no documents found for workspace!",
+      };
+    }
+
+    const queryVector = await LLMConnector.embedTextInput(input);
+    console.log("[AnythingLLM DEBUG] performDistanceSearch:");
+    console.log("  - Namespace:", namespace);
+    console.log("  - Search Input:", input);
+    console.log("  - Query Vector Dimension:", queryVector.length);
+    console.log("  - Query Vector (first 10):", queryVector.slice(0, 10));
+    console.log("  - Distance Threshold:", distanceThreshold);
+    console.log("  - TopN:", topN);
+    const { contextTexts, sourceDocuments } = await this.distanceResponse(
+      client,
+      namespace,
+      queryVector,
+      distanceThreshold,
+      topN,
+      filterIdentifiers
+    );
+
+    const sources = await Promise.all(sourceDocuments.map(async (metadata, i) => {
+      let text = contextTexts[i];
+      if (process.env.ENABLE_TRANSLATION === 'true' && LLMConnector.translateText) {
+        text = await LLMConnector.translateText(contextTexts[i], "english", "chinese");
+      }
+      return { metadata: { ...metadata, text } };
+    }));
+
+    return {
+      contextTexts,
+      sources: this.curateSources(sources),
+      message: false,
+    };
+  },
+
+  performSimilaritySearch: async function ({
+    namespace = null,
+    input = "",
+    LLMConnector = null,
+    similarityThreshold = 0.25,
+    topN = 4,
+    filterIdentifiers = [],
+  }) {
+    if (!namespace || !input || !LLMConnector)
+      throw new Error("Invalid request to performSimilaritySearch.");
+
+    const { client } = await this.connect();
+    if (!(await this.namespaceExists(client, namespace))) {
+      return {
+        contextTexts: [],
+        sources: [],
+        message: "Invalid query - no documents found for workspace!",
+      };
+    }
+
+    const queryVector = await LLMConnector.embedTextInput(input);
+    const { contextTexts, sourceDocuments } = await this.similarityResponse(
+      client,
+      namespace,
+      queryVector,
+      similarityThreshold,
+      topN,
+      filterIdentifiers
+    );
+
+    const sources = await Promise.all(sourceDocuments.map(async (metadata, i) => {
+      let text = contextTexts[i];
+      if (process.env.ENABLE_TRANSLATION === 'true' && LLMConnector.translateText) {
+        text = await LLMConnector.translateText(contextTexts[i], "english", "chinese");
+      }
+      return { metadata: { ...metadata, text } };
+    }));
+
+    return {
+      contextTexts,
+      sources: this.curateSources(sources),
+      message: false,
+    };
+  },
+
   "namespace-stats": async function (reqBody = {}) {
     const { namespace = null } = reqBody;
     if (!namespace) throw new Error("namespace required");

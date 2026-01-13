@@ -502,6 +502,69 @@ class LlamaCppAILLM {
   }
 
   /**
+   * Calculate optimal image size to fit within token budget.
+   * Vision models use patches (typically 14x14 pixels) as tokens.
+   * @param {number} maxTokens - Maximum tokens allowed for the request
+   * @param {number} patchSize - Patch size in pixels (default 14 for LLaVA)
+   * @returns {number} - Optimal image dimension (square)
+   */
+  calculateImageSizeForTokens(maxTokens, patchSize = 14) {
+    // Reserve tokens for text prompt (~50-100 tokens) and response
+    const reservedTokens = 150;
+    const availableImageTokens = Math.max(maxTokens - reservedTokens, 100);
+    
+    // Calculate patches per side: sqrt(available_tokens)
+    const patchesPerSide = Math.floor(Math.sqrt(availableImageTokens));
+    
+    // Calculate pixel dimension
+    const imageDimension = patchesPerSide * patchSize;
+    
+    console.log(`Token budget: ${maxTokens}, Available for image: ${availableImageTokens} tokens, Target size: ${imageDimension}x${imageDimension}`);
+    return Math.min(imageDimension, 672); // Cap at 672 (LLaVA max high-res)
+  }
+
+  /**
+   * Resize image to fit within token budget while maintaining aspect ratio.
+   * @param {string} base64Image - Base64 encoded image string
+   * @param {number} maxTokens - Maximum tokens allowed
+   * @returns {Promise<string>} - Resized image as base64
+   */
+  async resizeImageForTokens(base64Image, maxTokens) {
+    try {
+      const sharp = require('sharp');
+      
+      // Calculate optimal size based on token budget
+      const targetSize = this.calculateImageSizeForTokens(maxTokens);
+      
+      // Remove data URL prefix if present
+      const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
+      const imageBuffer = Buffer.from(base64Data, 'base64');
+      
+      // Get original image metadata
+      const metadata = await sharp(imageBuffer).metadata();
+      console.log(`Original image: ${metadata.width}x${metadata.height}`);
+      
+      // Resize image maintaining aspect ratio
+      const resizedBuffer = await sharp(imageBuffer)
+        .resize(targetSize, targetSize, {
+          fit: 'inside',
+          withoutEnlargement: true
+        })
+        .jpeg({ quality: 85, mozjpeg: true })
+        .toBuffer();
+      
+      const resizedBase64 = resizedBuffer.toString('base64');
+      console.log(`Image resized: ${base64Data.length} -> ${resizedBase64.length} chars (${Math.round(resizedBase64.length/base64Data.length*100)}% of original)`);
+      
+      return resizedBase64;
+    } catch (error) {
+      console.error('Error resizing image:', error);
+      // If sharp is not available or resize fails, return original
+      return base64Image.replace(/^data:image\/\w+;base64,/, '');
+    }
+  }
+
+  /**
    * Describes the content of an image using LLaVA through llama.cpp server.
    * @param {string} imageContent - The base64 encoded image content.
    * @param {string} [prompt="What is in this picture?"] - The prompt for the description.
@@ -512,10 +575,16 @@ class LlamaCppAILLM {
     const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minutes timeout
 
     try {
-      // Format image URL properly with data prefix if not already present
-      const imageUrl = imageContent.startsWith('data:') 
-        ? imageContent 
-        : `data:image/jpeg;base64,${imageContent}`;
+      // Get token limit for the image2text model
+      const contextSize = parseInt(process.env.IMAGE2TEXT_MODEL_TOKEN_LIMIT) || 4096;
+      const maxOutputTokens = parseInt(process.env.IMAGE2TEXT_MODEL_MAX_TOKENS) || 512;
+      
+      // Resize image to fit within token budget
+      console.log(`Resizing image to fit within ${contextSize} total tokens (${maxOutputTokens} reserved for output)...`);
+      const resizedBase64 = await this.resizeImageForTokens(imageContent, contextSize - maxOutputTokens);
+      
+      // Format image URL with resized data
+      const imageUrl = `data:image/jpeg;base64,${resizedBase64}`;
       
       const data = {
         model: this.image2text_model,
@@ -532,7 +601,7 @@ class LlamaCppAILLM {
             ]
           }
         ],
-        max_tokens: 1024,
+        max_tokens: maxOutputTokens,
         temperature: 0.7
       };
 
@@ -595,20 +664,18 @@ class LlamaCppAILLM {
         // STEP 1: Get image description
         const image_description = await this.describeImage(imageContent, prompt);
         
-        // STEP 2: Handle Error objects properly
+        // STEP 2: Handle Error objects properly - convert to string
+        let imageDescText;
         if (image_description instanceof Error) {
           console.error(`Image description failed: ${image_description.message}`);
-          results.push({
-            //description: `${description},image description : Error in describing image`,
-            description: [description,image_description],
-          });
-          continue;
+          imageDescText = `Error: ${image_description.message}`;
+        } else {
+          imageDescText = image_description;
         }
-        // STEP 3: Combine description and image description
-        const all_description = `${description},image description :${image_description}`
         
+        // STEP 3: Return array of strings [description, image_description]
         results.push({
-          description: [description,image_description],
+          description: [description, imageDescText],
         });
       } catch (error) {
         console.error(`Failed to process image:`, error);

@@ -75,6 +75,26 @@ class LlamaCppEmbedder {
 
     for (const chunk of textChunks) {
       try {
+        // Validate chunk is a string
+        if (chunk === null || chunk === undefined) {
+          console.warn("Skipping null/undefined chunk");
+          data.push(new Array(this.embedding_dimension).fill(0));
+          continue;
+        }
+        
+        if (typeof chunk !== 'string') {
+          console.error('Invalid chunk type:', typeof chunk, 'Value:', chunk);
+          throw new Error(`Chunk must be a string, got ${typeof chunk}`);
+        }
+        
+        if (!chunk || chunk.trim() === '') {
+          console.warn("Skipping empty chunk");
+          data.push(new Array(this.embedding_dimension).fill(0));
+          continue;
+        }
+        
+        console.log(`Embedding chunk type: ${typeof chunk}, length: ${chunk.length}, preview: "${chunk.substring(0, 100)}..."`);
+        
         const response = await fetch(this.basePath, {
           method: "POST",
           headers: {
@@ -85,14 +105,34 @@ class LlamaCppEmbedder {
           }),
         });
 
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`Embedding API HTTP error: ${response.status} - ${errorText}`);
+          throw new Error(`LlamaCpp embedding API error: ${response.status} - ${errorText}`);
+        }
+
         const responseData = await response.json();
+        console.log("Raw embedding response:", JSON.stringify(responseData).substring(0, 300));
+        console.log("Response type:", typeof responseData, "Is array:", Array.isArray(responseData));
+        
+        // Extract embedding from llamacpp-python format: [{ "embedding": [[...]] }]
+        const embedding = responseData?.[0]?.embedding?.[0];
+        
+        if (!embedding || !Array.isArray(embedding) || embedding.length === 0) {
+          console.error("Failed to extract embedding. Response structure:", {
+            isArray: Array.isArray(responseData),
+            hasFirstElement: !!responseData?.[0],
+            firstElementKeys: responseData?.[0] ? Object.keys(responseData[0]) : null,
+            fullResponse: JSON.stringify(responseData).substring(0, 500)
+          });
+          throw new Error("LlamaCpp returned invalid embedding structure!");
+        }
+        
+        // Normalize the embedding
+        const embeddingMagnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+        const normalizedEmbedding = embedding.map(val => val / embeddingMagnitude);
 
-        // Adjust based on llamacpp-python's response structure
-        const embedding = responseData?.[0]["embedding"][0];
-        if (!Array.isArray(embedding) || embedding.length === 0)
-          throw new Error("LlamaCpp returned an empty embedding for chunk!");
-
-        data.push(embedding);
+        data.push(normalizedEmbedding);
       } catch (err) {
         this.log(err.message);
         error = err.message;
@@ -125,6 +165,18 @@ class LlamaCppEmbedder {
 
     for (const chunk of textChunks) {
       try {
+        // Validate chunk is a string
+        if (chunk === null || chunk === undefined) {
+          console.warn("Skipping null/undefined chunk in embedChunksLlamaServer");
+          data.push(new Array(this.embedding_dimension).fill(0));
+          continue;
+        }
+        
+        if (typeof chunk !== 'string') {
+          console.error('Invalid chunk type in embedChunksLlamaServer:', typeof chunk, 'Value:', chunk);
+          throw new Error(`Chunk must be a string, got ${typeof chunk}`);
+        }
+        
         // Skip empty chunks
         if (!chunk || chunk.trim() === '') {
           console.warn("Skipping empty chunk");
@@ -132,12 +184,13 @@ class LlamaCppEmbedder {
           continue;
         }
         
-        // Use the format from the Python example
+        // Use the format expected by llamacpp-python
         const payload = {
-          content: chunk,  // Change from 'prompt' to 'content'
+          content: chunk,  // llamacpp-python expects 'content' field
         };
         
         console.log(`Sending embedding request to ${this.basePath} for text: "${chunk.substring(0, 50)}..."`);
+        console.log(`Payload:`, JSON.stringify(payload).substring(0, 200));
         
         const response = await fetch(this.basePath, {
           method: "POST",
@@ -153,10 +206,10 @@ class LlamaCppEmbedder {
         }
 
         const result = await response.json();
-        console.log(result); // Process the JSON data
-        // Log response structure for debugging
-        console.log("Response keys:", Object.keys(result));
-        let embedding = result[0]["embedding"][0]
+        console.log("Embedding API raw response:", JSON.stringify(result).substring(0, 200)); // Debug log
+        
+        // Extract embedding from llamacpp-python format: [{ "embedding": [[...]] }]
+        const embedding = result?.[0]?.embedding?.[0];
         
         if (!embedding || !Array.isArray(embedding) || embedding.length === 0) {
           console.warn("Could not find embedding in response, full response:", JSON.stringify(result).substring(0, 200) + "...");

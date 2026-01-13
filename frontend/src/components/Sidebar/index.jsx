@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { List, Plus } from "@phosphor-icons/react";
+import { List, Plus, MagnifyingGlass } from "@phosphor-icons/react";
 import NewWorkspaceModal, {
   useNewWorkspaceModal,
 } from "../Modals/NewWorkspace";
@@ -8,7 +8,7 @@ import useLogo from "@/hooks/useLogo";
 import useUser from "@/hooks/useUser";
 import Footer from "../Footer";
 import SettingsButton from "../SettingsButton";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import paths from "@/utils/paths";
 import { useTranslation } from "react-i18next";
 import { useSidebarToggle, ToggleSidebarButton } from "./SidebarToggle";
@@ -29,6 +29,12 @@ export default function Sidebar({
     showModal: showNewWsModal,
     hideModal: hideNewWsModal,
   } = useNewWorkspaceModal();
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+
+  const handleSearchClick = () => {
+    navigate(paths.search.imageSearch());
+  };
 
   return (
     <>
@@ -73,6 +79,15 @@ export default function Sidebar({
               </div>
               <div className="absolute bottom-0 left-0 right-0 pt-4 pb-3 rounded-b-[16px] bg-theme-bg-sidebar bg-opacity-80 backdrop-filter backdrop-blur-md z-1">
                 <Footer />
+                <button
+                  onClick={handleSearchClick}
+                  className="flex items-center justify-center w-full h-[44px] bg-theme-button-search rounded-[8px] text-white mt-4 hover:bg-opacity-80 transition-all duration-300"
+                >
+                  <MagnifyingGlass size={18} weight="bold" className="text-white"/>
+                  <p className="ml-2 text-white text-sidebar text-sm font-semibold">
+                    {t("sidebar.rag-search")}
+                  </p>
+                </button>
               </div>
             </div>
           </div>

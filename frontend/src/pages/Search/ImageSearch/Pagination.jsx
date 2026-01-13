@@ -1,58 +1,99 @@
-import { CaretLeft, CaretRight } from "@phosphor-icons/react";
+import React from 'react';
 
-export function Pagination({
-  currentPage,
-  totalPages,
-  onPageChange,
-  itemsPerPage,
+export function Pagination({ 
+  currentPage, 
+  totalPages, 
+  onPageChange, 
+  itemsPerPage, 
   onItemsPerPageChange,
-  totalItems,
+  totalItems 
 }) {
-  if (!totalItems || totalItems === 0) return null;
+  // Options for items per page dropdown
+  const itemsPerPageOptions = [10, 20, 50, 100];
+  
+  // Generate array of page numbers to display
+  const getPageNumbers = () => {
+    const pageNumbers = [];
+    
+    // Always show first page
+    pageNumbers.push(1);
+    
+    // Add current page and surrounding pages
+    for (let i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) {
+      if (pageNumbers[pageNumbers.length - 1] !== i - 1) {
+        // Add ellipsis if there's a gap
+        pageNumbers.push('...');
+      }
+      pageNumbers.push(i);
+    }
+    
+    // Add last page if needed
+    if (totalPages > 1) {
+      if (pageNumbers[pageNumbers.length - 1] !== totalPages - 1) {
+        // Add ellipsis if there's a gap
+        pageNumbers.push('...');
+      }
+      pageNumbers.push(totalPages);
+    }
+    
+    return pageNumbers;
+  };
 
   return (
-    <div className="flex items-center justify-between mt-6 px-4 py-3 bg-theme-bg-secondary rounded-lg">
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-white/70">Items per page:</span>
-        <select
+    <div className="flex flex-wrap items-center justify-between py-4 px-2 mt-4 bg-gray-900 rounded-lg">
+      <div className="flex items-center space-x-2 text-white mb-2 md:mb-0">
+        <span>Show:</span>
+        <select 
           value={itemsPerPage}
-          onChange={(e) => onItemsPerPageChange(Number(e.target.value))}
-          className="px-3 py-1 rounded bg-theme-settings-input-bg text-white border border-white/10 focus:outline-primary-button"
+          onChange={(e) => onItemsPerPageChange(e.target.value)}
+          className="bg-gray-800 text-white rounded px-2 py-1 border border-gray-700"
         >
-          <option value={20}>20</option>
-          <option value={50}>50</option>
-          <option value={100}>100</option>
+          {itemsPerPageOptions.map(option => (
+            <option key={option} value={option}>{option}</option>
+          ))}
         </select>
-      </div>
-
-      <div className="flex items-center gap-4">
-        <span className="text-sm text-white/70">
-          {totalItems} {totalItems === 1 ? "result" : "results"}
+        <span>per page</span>
+        <span className="ml-4">
+          Showing {Math.min((currentPage - 1) * itemsPerPage + 1, totalItems)} - {Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems}
         </span>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => onPageChange(currentPage - 1)}
-            disabled={currentPage === 1}
-            className="p-2 rounded bg-theme-button text-white hover:bg-theme-button-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            aria-label="Previous page"
+      </div>
+      
+      <div className="flex items-center space-x-1">
+        {/* Previous page button */}
+        <button 
+          onClick={() => onPageChange(currentPage - 1)} 
+          disabled={currentPage === 1}
+          className={`px-3 py-1 rounded ${currentPage === 1 ? 'bg-gray-800 text-gray-600' : 'bg-gray-800 text-white hover:bg-gray-700'}`}
+        >
+          &laquo;
+        </button>
+        
+        {/* Page numbers */}
+        {getPageNumbers().map((page, index) => (
+          <button 
+            key={index}
+            onClick={() => typeof page === 'number' ? onPageChange(page) : null}
+            disabled={page === '...'}
+            className={`px-3 py-1 rounded ${
+              page === currentPage 
+                ? 'bg-blue-600 text-white' 
+                : page === '...' 
+                  ? 'bg-gray-800 text-gray-400 cursor-default'
+                  : 'bg-gray-800 text-white hover:bg-gray-700'
+            }`}
           >
-            <CaretLeft size={16} weight="bold" />
+            {page}
           </button>
-
-          <span className="text-sm text-white px-2">
-            Page {currentPage} of {totalPages}
-          </span>
-
-          <button
-            onClick={() => onPageChange(currentPage + 1)}
-            disabled={currentPage === totalPages}
-            className="p-2 rounded bg-theme-button text-white hover:bg-theme-button-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            aria-label="Next page"
-          >
-            <CaretRight size={16} weight="bold" />
-          </button>
-        </div>
+        ))}
+        
+        {/* Next page button */}
+        <button 
+          onClick={() => onPageChange(currentPage + 1)} 
+          disabled={currentPage === totalPages}
+          className={`px-3 py-1 rounded ${currentPage === totalPages ? 'bg-gray-800 text-gray-600' : 'bg-gray-800 text-white hover:bg-gray-700'}`}
+        >
+          &raquo;
+        </button>
       </div>
     </div>
   );

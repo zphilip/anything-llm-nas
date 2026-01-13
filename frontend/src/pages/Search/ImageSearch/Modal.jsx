@@ -1,126 +1,165 @@
-import { X, MapPin, Camera } from "@phosphor-icons/react";
-import { formatDistance } from "./utils";
+import { downloadImage } from './utils.js'
 
-export function Modal({ currentImage, setCurrentImage, searchDistance }) {
-  if (!currentImage) return null;
-
-  return (
-    <div
-      className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
-      onClick={() => setCurrentImage(null)}
-    >
-      <div className="relative max-w-7xl max-h-full w-full">
-        <button
-          onClick={() => setCurrentImage(null)}
-          className="absolute top-4 right-4 z-10 p-2 rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors"
-          aria-label="Close modal"
-        >
-          <X size={24} weight="bold" />
-        </button>
-
+export function Modal({ currentImage, setCurrentImage }) {
+    const photo_url = currentImage ? `https://unsplash.com/photos/${currentImage.id}` : null;
+    const photo_image_url = currentImage ? `https://images.unsplash.com/${currentImage.url}?auto=format&fit=crop&w=480&q=80` : null;
+    return (
         <div
-          className="relative bg-theme-bg-secondary rounded-lg overflow-hidden shadow-2xl"
-          onClick={(e) => e.stopPropagation()}
+            className='fixed inset-0 z-30 backdrop-blur-2xl w-full h-full bg-black top-0 left-0 transition'
+            style={{
+                backgroundColor: `rgba(0, 0, 0, ${currentImage ? 0.8 : 0})`,
+                opacity: currentImage ? 1 : 0,
+                pointerEvents: currentImage ? 'auto' : 'none',
+            }}
         >
-          <div className="max-h-[70vh] overflow-hidden flex items-center justify-center bg-black">
-            <img
-              src={`data:image/jpeg;base64,${currentImage.image_base64}`}
-              alt={currentImage.image_name || "Image"}
-              className="max-w-full max-h-[70vh] object-contain"
-            />
-          </div>
-
-          <div className="p-6 bg-theme-bg-secondary text-white">
-            <h3 className="text-lg font-bold mb-3">{currentImage.image_name || "Unknown"}</h3>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-              {currentImage._distance !== null && currentImage._distance !== undefined && (
-                <div>
-                  <span className="text-white/50">Distance Score:</span>
-                  <p className="font-medium mt-1">
-                    {formatDistance(currentImage._distance, searchDistance)}
-                  </p>
+            {currentImage && <>
+                <img
+                    alt=''
+                    className="transform rounded-lg transition will-change-auto w-full h-full object-contain"
+                    style={{
+                        transform: 'translate3d(0, 0, 0)',
+                    }}
+                    src={photo_image_url}
+                />
+                <div
+                    className='absolute top-0 left-0 flex items-center gap-2 p-3 text-white'
+                >
+                    <button
+                        onClick={() => setCurrentImage(null)}
+                        className="rounded-full bg-black/50 p-2 text-white/75 backdrop-blur-lg transition hover:bg-black/75 hover:text-white">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" aria-hidden="true" className="h-5 w-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
                 </div>
-              )}
-
-              {currentImage.camera && (
-                <div className="flex items-start gap-2">
-                  <Camera size={18} className="text-white/50 mt-0.5" />
-                  <div>
-                    <span className="text-white/50">Camera:</span>
-                    <p className="font-medium mt-1">{currentImage.camera}</p>
-                  </div>
+                <div className="absolute top-0 right-0 flex items-center gap-2 p-3 text-white">
+                    <a
+                        href={photo_url}
+                        className="rounded-full bg-black/50 p-2 text-white/75 backdrop-blur-lg transition hover:bg-black/75 hover:text-white"
+                        target="_blank" title="View on Unsplash"
+                        rel="noreferrer">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" aria-hidden="true" className="h-5 w-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"></path>
+                        </svg>
+                    </a>
+                    <button
+                        onClick={() => downloadImage(photo_image_url, `${currentImage.id}.png`)}
+                        className="rounded-full bg-black/50 p-2 text-white/75 backdrop-blur-lg transition hover:bg-black/75 hover:text-white" title="Download">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" aria-hidden="true" className="h-5 w-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3">
+                            </path>
+                        </svg>
+                    </button>
                 </div>
-              )}
+            </>
+            }
 
-              {currentImage.lens && (
-                <div>
-                  <span className="text-white/50">Lens:</span>
-                  <p className="font-medium mt-1">{currentImage.lens}</p>
-                </div>
-              )}
-
-              {currentImage.location && (
-                <div className="flex items-start gap-2">
-                  <MapPin size={18} className="text-white/50 mt-0.5" />
-                  <div>
-                    <span className="text-white/50">Location:</span>
-                    <p className="font-medium mt-1">
-                      {currentImage.location.latitude}, {currentImage.location.longitude}
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {currentImage.cameraSettings && (
-                <div className="col-span-full">
-                  <span className="text-white/50">Camera Settings:</span>
-                  <div className="flex flex-wrap gap-4 mt-2">
-                    {currentImage.cameraSettings.iso && (
-                      <span className="px-2 py-1 bg-white/10 rounded text-xs">
-                        ISO {currentImage.cameraSettings.iso}
-                      </span>
-                    )}
-                    {currentImage.cameraSettings.fNumber && (
-                      <span className="px-2 py-1 bg-white/10 rounded text-xs">
-                        {currentImage.cameraSettings.fNumber}
-                      </span>
-                    )}
-                    {currentImage.cameraSettings.exposureTime && (
-                      <span className="px-2 py-1 bg-white/10 rounded text-xs">
-                        {currentImage.cameraSettings.exposureTime}
-                      </span>
-                    )}
-                    {currentImage.cameraSettings.focalLength && (
-                      <span className="px-2 py-1 bg-white/10 rounded text-xs">
-                        {currentImage.cameraSettings.focalLength}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {currentImage.url && (
-                <div className="col-span-full">
-                  <span className="text-white/50">File Path:</span>
-                  <p className="font-mono text-xs mt-1 break-all text-white/70">
-                    {currentImage.url}
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+        </div>)
 }
 
-// Aliases for compatibility
-export function ModalV2(props) {
-  return <Modal {...props} />;
+export function ModalV2({ currentImage, setCurrentImage }) {
+    const base_url = ""
+    const photo_url = currentImage ? `${base_url}${currentImage.id}` : null;
+    const photo_image_url = currentImage ? `${base_url}${currentImage.url}?auto=format&fit=crop&w=480&q=80` : null;
+    return (
+        <div
+            className='fixed inset-0 z-30 backdrop-blur-2xl w-full h-full bg-black top-0 left-0 transition'
+            style={{
+                backgroundColor: `rgba(0, 0, 0, ${currentImage ? 0.8 : 0})`,
+                opacity: currentImage ? 1 : 0,
+                pointerEvents: currentImage ? 'auto' : 'none',
+            }}
+        >
+            {currentImage && <>
+                <img
+                    alt=''
+                    className="transform rounded-lg transition will-change-auto w-full h-full object-contain"
+                    style={{
+                        transform: 'translate3d(0, 0, 0)',
+                    }}
+                    src={photo_image_url}
+                />
+                <div
+                    className='absolute top-0 left-0 flex items-center gap-2 p-3 text-white'
+                >
+                    <button
+                        onClick={() => setCurrentImage(null)}
+                        className="rounded-full bg-black/50 p-2 text-white/75 backdrop-blur-lg transition hover:bg-black/75 hover:text-white">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" aria-hidden="true" className="h-5 w-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                <div className="absolute top-0 right-0 flex items-center gap-2 p-3 text-white">
+                    <a
+                        href={photo_url}
+                        className="rounded-full bg-black/50 p-2 text-white/75 backdrop-blur-lg transition hover:bg-black/75 hover:text-white"
+                        target="_blank" title="View on Unsplash"
+                        rel="noreferrer">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" aria-hidden="true" className="h-5 w-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"></path>
+                        </svg>
+                    </a>
+                    <button
+                        onClick={() => downloadImage(photo_image_url, `${currentImage.id}.png`)}
+                        className="rounded-full bg-black/50 p-2 text-white/75 backdrop-blur-lg transition hover:bg-black/75 hover:text-white" title="Download">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" aria-hidden="true" className="h-5 w-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3">
+                            </path>
+                        </svg>
+                    </button>
+                </div>
+            </>
+            }
+
+        </div>)
 }
 
-export function ModalV3(props) {
-  return <Modal {...props} />;
+export function ModalV3({ currentImage, setCurrentImage }) {
+    const base_url = ""
+    const photo_url = currentImage ? `${base_url}${currentImage.id}` : null;
+    const photo_image_url = currentImage ? `data:image/png;base64,${currentImage.image_base64}` : null;
+    return (
+        <div
+            className='fixed inset-0 z-30 backdrop-blur-2xl w-full h-full bg-black top-0 left-0 transition'
+            style={{
+                backgroundColor: `rgba(0, 0, 0, ${currentImage ? 0.8 : 0})`,
+                opacity: currentImage ? 1 : 0,
+                pointerEvents: currentImage ? 'auto' : 'none',
+            }}
+        >
+            {currentImage && <>
+                <img
+                    alt=''
+                    className="transform rounded-lg transition will-change-auto w-full h-full object-contain"
+                    style={{
+                        transform: 'translate3d(0, 0, 0)',
+                    }}
+                    src={photo_image_url}
+                />
+                <div
+                    className='absolute top-0 left-0 flex items-center gap-2 p-3 text-white'
+                >
+                    <button
+                        onClick={() => setCurrentImage(null)}
+                        className="rounded-full bg-black/50 p-2 text-white/75 backdrop-blur-lg transition hover:bg-black/75 hover:text-white">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" aria-hidden="true" className="h-5 w-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                <div className="absolute top-0 right-0 flex items-center gap-2 p-3 text-white">
+                    {/* Update the download button to handle base64 */}
+                    <button
+                        onClick={() => downloadImage(photo_image_url, `${Date.now()}.png`)}
+                        className="rounded-full bg-black/50 p-2 text-white/75 backdrop-blur-lg transition hover:bg-black/75 hover:text-white" title="Download">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" aria-hidden="true" className="h-5 w-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"></path>
+                        </svg>
+                    </button>
+                </div>                
+            </>
+            }
+
+        </div>)
 }

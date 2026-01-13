@@ -1,63 +1,89 @@
-/**
- * Utility functions for Image Search
- */
+const CACHE_NAME = 'image-database'; // Change version when needed
 
-/**
- * Format file size in human readable format
- * @param {number} bytes
- * @returns {string}
- */
-export function formatFileSize(bytes) {
-  if (bytes === 0) return "0 Bytes";
-  const k = 1024;
-  const sizes = ["Bytes", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + " " + sizes[i];
+export function blurHashToDataURL(hash) {
+    if (!hash) return undefined;
+    // Simplified placeholder - blurhash library not installed
+    return "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 300'%3E%3Crect fill='%23888' width='400' height='300'/%3E%3C/svg%3E";
 }
 
-/**
- * Format distance score for display
- * @param {number} distance
- * @param {string} metric
- * @returns {string}
- */
-export function formatDistance(distance, metric = "cosine") {
-  if (distance === null || distance === undefined) return "N/A";
-  
-  const formatted = distance.toFixed(4);
-  
-  switch (metric) {
-    case "cosine":
-      return `${formatted} (higher = more similar)`;
-    case "l2":
-    case "euclidean":
-      return `${formatted} (lower = more similar)`;
-    case "dot":
-      return `${formatted}`;
-    default:
-      return formatted;
-  }
+function downloadData(url, filename) {
+
+    // Create an anchor element with the data URL as the href attribute
+    const downloadLink = document.createElement('a');
+    downloadLink.href = url;
+
+    // Set the download attribute to specify the desired filename for the downloaded image
+    downloadLink.download = filename;
+
+    // Trigger the download
+    downloadLink.click();
+
+    // Clean up: remove the anchor element from the DOM
+    downloadLink.remove();
 }
 
-/**
- * Truncate text to max length
- * @param {string} text
- * @param {number} maxLength
- * @returns {string}
- */
-export function truncate(text, maxLength = 50) {
-  if (!text) return "";
-  if (text.length <= maxLength) return text;
-  return text.substring(0, maxLength) + "...";
+export function downloadImage(url, filename) {
+    fetch(url, {
+        headers: new Headers({
+            Origin: location.origin,
+        }),
+        mode: 'cors',
+    })
+        .then((response) => response.blob())
+        .then((blob) => {
+            let blobUrl = window.URL.createObjectURL(blob)
+            downloadData(blobUrl, filename)
+        })
+        .catch((e) => console.error(e))
 }
 
-/**
- * Get file extension from filename
- * @param {string} filename
- * @returns {string}
- */
-export function getFileExtension(filename) {
-  if (!filename) return "";
-  const parts = filename.split(".");
-  return parts.length > 1 ? parts.pop().toLowerCase() : "";
+async function clearOldCaches() {
+    const cacheNames = await caches.keys();
+    for (const cacheName of cacheNames) {
+        if (cacheName !== CACHE_NAME) {
+            await caches.delete(cacheName); // Delete old caches
+        }
+    }
+}
+
+// Adapted from https://github.com/xenova/transformers.js/blob/c367f9d68b809bbbf81049c808bf6d219d761d23/src/utils/hub.js#L330
+export async function getCachedFile(url) {
+    let cache;
+    try {
+        cache = await caches.open('image-database');
+        const cachedResponse = await cache.match(url);
+        if (cachedResponse) {
+            return await cachedResponse.arrayBuffer();
+        }
+    } catch (e) {
+        console.warn('Unable to open cache', e);
+    }
+
+    // No cache, or cache failed to open. Fetch the file.
+    const response = await fetch(url);
+    const buffer = await response.arrayBuffer();
+
+    if (cache) {
+        try {
+            clearOldCaches();
+            // NOTE: We use `new Response(buffer, ...)` instead of `response.clone()` to handle LFS files
+            await cache.put(url, new Response(buffer, {
+                headers: response.headers,
+            }));
+        } catch (e) {
+            console.warn('Unable to cache file', e);
+        }
+    }
+
+    return buffer;
+
+}
+
+export async function getCachedJSON(url) {
+    let buffer = await getCachedFile(url);
+
+    let decoder = new TextDecoder('utf-8');
+    let jsonData = decoder.decode(buffer);
+
+    return JSON.parse(jsonData);
 }

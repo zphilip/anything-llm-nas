@@ -80,6 +80,11 @@ const TRANSLATIONS = {
     goToWorkspace: 'Go to "{{workspace}}"',
   },
 
+  // Sidebar menu items
+  sidebar: {
+    "rag-search": "RAG Search",
+  },
+
   // Setting Sidebar menu items.
   settings: {
     title: "Instance Settings",

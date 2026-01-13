@@ -5,6 +5,7 @@ import { SearchBarOption } from "./SearchBar";
 import { ImageGridV3 } from "./ImageGrid";
 import { Pagination } from "./Pagination";
 import { ModalV3 } from "./Modal";
+import { AUTH_TOKEN } from "@/utils/constants";
 
 export default function ImageSearch() {
   // Application state
@@ -61,6 +62,8 @@ export default function ImageSearch() {
 
   // Load base64 images from server
   const loadBase64Images = async (rawImages) => {
+    console.log("[loadBase64Images] Input rawImages:", rawImages?.length || 0, "items");
+    
     if (!rawImages || rawImages.length === 0) {
       console.warn("No images to process");
       return [];
@@ -68,37 +71,50 @@ export default function ImageSearch() {
 
     setIsProcessing(true);
     try {
+      console.log("[loadBase64Images] Processing", rawImages.length, "images");
+      console.log("[loadBase64Images] First image structure:", rawImages[0]);
+      
       const loadedImages = await Promise.all(
         rawImages.map(async (image) => {
           try {
             // Extract base64 from pageContent if it exists
             if (image.image_base64) {
+              console.log("Image already has base64");
               return image; // Already has base64
             }
 
-            // Fetch from URL if needed
-            const imageUrl = image.url
+            // Use customDocument field to fetch the JSON file with base64 data
+            const jsonFilePath = image.customDocument || image.url;
+            const imageUrl = jsonFilePath
               .replace("file://", "")
               .replace(String(process.env.STORAGE_DIR || ""), "");
             
+            console.log(`Fetching image data from: ${imageUrl}`);
+            
             const response = await fetch(imageUrl);
             if (!response.ok) {
-              console.warn(`Image not found: ${imageUrl}`);
+              console.warn(`Image not found: ${imageUrl}, status: ${response.status}`);
               return null;
             }
 
             const jsonData = await response.json();
+            console.log(`Successfully loaded image data, base64 length: ${jsonData.pageContent?.length || 0}`);
 
             return {
               ...image,
+              image_name: image.title || image.url?.split('/').pop() || 'Unknown',
+              image_description: image.text || image.description || 'No description',
               image_base64: jsonData.pageContent,
+              _distance: image._distance || image.score,
             };
           } catch (error) {
-            console.error(`Error loading image ${image.image_name}:`, error);
+            console.error(`Error loading image:`, error);
             return null;
           }
         })
       );
+
+      console.log(`[loadBase64Images] Loaded ${loadedImages.filter(Boolean).length} out of ${rawImages.length} images`);
 
       // Filter out failed loads and sort by distance
       const validImages = loadedImages
@@ -118,6 +134,8 @@ export default function ImageSearch() {
             : a._distance - b._distance;
         });
 
+      console.log(`[loadBase64Images] Returning ${validImages.length} valid images`);
+      console.log(`[loadBase64Images] First valid image:`, validImages[0]);
       return validImages;
     } catch (error) {
       console.error("Error processing images:", error);
@@ -148,11 +166,16 @@ export default function ImageSearch() {
           setReady(true);
           break;
         case "complete":
+          console.log("[Worker Complete] Received data:", event.data.output?.length || 0, "items");
+          console.log("[Worker Complete] Current searchId:", searchId, "Received searchId:", event.data.searchId);
+          
           // Only process results if they match the current search ID
           if (event.data.searchId === searchId) {
+            console.log("[Worker Complete] Processing results...");
             const processedResults = await loadBase64Images(
               event.data.output
             );
+            console.log("[Worker Complete] Processed results:", processedResults?.length || 0, "items");
             setProcessedImages(processedResults || []);
           } else {
             console.log(
@@ -183,6 +206,17 @@ export default function ImageSearch() {
       // Clear previous results
       setProcessedImages([]);
 
+      // Check if any workspaces are selected
+      const hasSelectedWorkspaces = Object.values(checkedWorkspaces).some(
+        (isChecked) => isChecked
+      );
+      
+      if (!hasSelectedWorkspaces) {
+        alert("Please select at least one workspace to search.");
+        setIsProcessing(false);
+        return;
+      }
+
       // Increment search ID to track the current search
       const currentSearchId = searchId + 1;
       setSearchId(currentSearchId);
@@ -211,7 +245,7 @@ export default function ImageSearch() {
           console.log("Selected workspaces:", selectedWorkspaces);
 
           // Get auth token for API calls
-          const token = localStorage.getItem("anythingllm_authtoken");
+          const token = localStorage.getItem(AUTH_TOKEN);
           const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
           // Send to worker
