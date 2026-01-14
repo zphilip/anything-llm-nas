@@ -418,10 +418,9 @@ const LanceDb = {
       const EmbedderEngine = getEmbeddingEngineSelection();
       const imageDescribeEngine = getLLMProvider();
       
-      // Extract the image path from fullFilePath
-      const imagePath = removeUuidAndJson(fullFilePath);
-      const fileType = isImage(imagePath) ? "image" : "text";
-      console.log("Extracted Image Path:", imagePath, "Type:", fileType);
+      // Check fileType from metadata (set by collector) instead of checking file extension
+      const fileType = metadata.fileType || (isImage(fullFilePath) ? "image" : "text");
+      console.log("Processing document with fileType:", fileType, "from:", fullFilePath);
 
       const textSplitter = new TextSplitter({
         chunkSize: TextSplitter.determineMaxChunkSize(
@@ -454,22 +453,38 @@ const LanceDb = {
           };
         }
         
-        // Get image description from LLM - use filename as fallback if description is missing
-        const fileDescription = metadata.description || metadata.title || fullFilePath.split('/').pop() || "Image file";
-        console.log("File description for image:", fileDescription);
+        // Get image description from LLM - use title (filename) as fallback if description is missing
+        // metadata.description is often null, so use metadata.title (which contains the filename)
+        const fileDescription = metadata.title || metadata.description || fullFilePath.split('/').pop() || "Image file";
+        console.log("[IMAGE EMBEDDING DEBUG] metadata.title:", metadata.title);
+        console.log("[IMAGE EMBEDDING DEBUG] metadata.description:", metadata.description);
+        console.log("[IMAGE EMBEDDING DEBUG] Using fileDescription:", fileDescription);
         
         const imageDescriptions = await imageDescribeEngine.describeImages([pageContent], [fileDescription]);
+        console.log("[IMAGE EMBEDDING DEBUG] imageDescriptions result:", JSON.stringify(imageDescriptions, null, 2));
+        
         const desc = imageDescriptions[0].description; // desc is already an array: [description, image_description]
+        console.log("[IMAGE EMBEDDING DEBUG] desc extracted:", desc);
+        console.log("[IMAGE EMBEDDING DEBUG] desc type:", Array.isArray(desc) ? 'Array' : typeof desc);
+        console.log("[IMAGE EMBEDDING DEBUG] desc length:", desc.length);
         
-        console.log("Description array:", desc);
-        
-        // Embed the description text - desc is already an array, don't wrap it again
+        // desc should be an array: [filename, AI_description]
+        // embedChunks expects array of strings, so this is correct
         const textEmbeddings = await EmbedderEngine.embedChunks(desc);
+        console.log("[IMAGE EMBEDDING DEBUG] textEmbeddings count:", textEmbeddings.length);
+        console.log("[IMAGE EMBEDDING DEBUG] textEmbeddings[0] dimension:", textEmbeddings[0]?.length);
+        console.log("[IMAGE EMBEDDING DEBUG] textEmbeddings[1] dimension:", textEmbeddings[1]?.length);
         
         if (!!textEmbeddings && textEmbeddings.length > 0) {
+          console.log(`[IMAGE EMBEDDING DEBUG] Processing ${textEmbeddings.length} embeddings`);
           for (const [i, textEmbedding] of textEmbeddings.entries()) {
             const id = uuidv4();
-            console.log("textEmbedding dimension:", textEmbedding.length);
+            
+            // Calculate vector magnitude to check normalization
+            const magnitude = Math.sqrt(textEmbedding.reduce((sum, val) => sum + val * val, 0));
+            console.log(`[IMAGE EMBEDDING ${i}] Dimension: ${textEmbedding.length}, Magnitude: ${magnitude.toFixed(6)}`);
+            console.log(`[IMAGE EMBEDDING ${i}] First 5 values:`, textEmbedding.slice(0, 5));
+            console.log(`[IMAGE EMBEDDING ${i}] Description: "${desc[i].substring(0, 100)}..."`);
             
             const vectorRecord = {
               id: id,
@@ -477,7 +492,7 @@ const LanceDb = {
               metadata: { ...metadata, text: desc[i] },
             };
             
-            imageVectors.push(vectorRecord); // Push to imageVectors like mything-llm
+            imageVectors.push(vectorRecord);
             submissions.push({
               ...vectorRecord.metadata,
               id: vectorRecord.id,
@@ -485,6 +500,7 @@ const LanceDb = {
             });
             documentVectors.push({ docId, vectorId: vectorRecord.id });
           }
+          console.log(`[IMAGE EMBEDDING DEBUG] Created ${imageVectors.length} vector records`)
         } else {
           throw new Error(
             "Could not embed image description! This document will not be recorded."
@@ -637,6 +653,13 @@ const LanceDb = {
     }
 
     const queryVector = await LLMConnector.embedTextInput(input);
+    
+    // Calculate query vector magnitude
+    const queryMagnitude = Math.sqrt(queryVector.reduce((sum, val) => sum + val * val, 0));
+    console.log(`[QUERY EMBEDDING] Input: "${input}"`);
+    console.log(`[QUERY EMBEDDING] Dimension: ${queryVector.length}, Magnitude: ${queryMagnitude.toFixed(6)}`);
+    console.log(`[QUERY EMBEDDING] First 5 values:`, queryVector.slice(0, 5));
+    
     console.log("[AnythingLLM DEBUG] performDistanceSearch:");
     console.log("  - Namespace:", namespace);
     console.log("  - Search Input:", input);
@@ -689,14 +712,14 @@ const LanceDb = {
     }
 
     const queryVector = await LLMConnector.embedTextInput(input);
-    const { contextTexts, sourceDocuments } = await this.similarityResponse(
+    const { contextTexts, sourceDocuments } = await this.similarityResponse({
       client,
       namespace,
       queryVector,
       similarityThreshold,
       topN,
-      filterIdentifiers
-    );
+      filterIdentifiers,
+    });
 
     const sources = await Promise.all(sourceDocuments.map(async (metadata, i) => {
       let text = contextTexts[i];

@@ -412,7 +412,7 @@ export default function DataServerOptions() {
               <ProcessingProgress progress={progress} processing={processing} />
             )}
             {(loading || processing) && (
-              <p className="text-xs text-white/50">
+              <p className="text-xs text-white/50 text-center">
                 Once complete, all files will be available for embedding into
                 workspaces in the document picker.
               </p>
@@ -461,13 +461,13 @@ function ProcessingProgress({ progress, processing }) {
   if (!progress || !processing) return null;
 
   return (
-    <div className="flex items-center gap-2 text-xs text-white/80">
-      <p>
+    <div className="flex flex-col items-center justify-center gap-2 my-4">
+      <p className="text-lg font-semibold text-white">
         Processing... {Number(progress).toFixed(2)}% complete
-        <span className="ml-2 text-white/60">
-          (Time elapsed: {formatTime(elapsedTime)})
-        </span>
-        <span className="animate-pulse">...</span>
+        <span className="animate-pulse ml-1">...</span>
+      </p>
+      <p className="text-sm text-white/70">
+        Time elapsed: {formatTime(elapsedTime)}
       </p>
     </div>
   );

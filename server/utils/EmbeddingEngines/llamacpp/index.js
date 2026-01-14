@@ -128,9 +128,18 @@ class LlamaCppEmbedder {
           throw new Error("LlamaCpp returned invalid embedding structure!");
         }
         
-        // Normalize the embedding
+        // ALWAYS normalize the embedding to ensure consistency
         const embeddingMagnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+        console.log(`[NORMALIZATION] Raw embedding magnitude: ${embeddingMagnitude.toFixed(6)}`);
+        
+        if (embeddingMagnitude === 0) {
+          console.error("Zero magnitude embedding detected - all values are zero!");
+          throw new Error("Received zero-magnitude embedding vector");
+        }
+        
         const normalizedEmbedding = embedding.map(val => val / embeddingMagnitude);
+        const normalizedMagnitude = Math.sqrt(normalizedEmbedding.reduce((sum, val) => sum + val * val, 0));
+        console.log(`[NORMALIZATION] Normalized magnitude: ${normalizedMagnitude.toFixed(6)} (should be ~1.0)`);
 
         data.push(normalizedEmbedding);
       } catch (err) {
@@ -216,9 +225,18 @@ class LlamaCppEmbedder {
           throw new Error("Failed to extract embedding from response");
         }
         
-        // Normalize the embedding
+        // ALWAYS normalize the embedding to ensure consistency
         const embeddingMagnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+        console.log(`[NORMALIZATION] Raw embedding magnitude: ${embeddingMagnitude.toFixed(6)}`);
+        
+        if (embeddingMagnitude === 0) {
+          console.error("Zero magnitude embedding detected - all values are zero!");
+          throw new Error("Received zero-magnitude embedding vector");
+        }
+        
         const normalizedEmbedding = embedding.map(val => val / embeddingMagnitude);
+        const normalizedMagnitude = Math.sqrt(normalizedEmbedding.reduce((sum, val) => sum + val * val, 0));
+        console.log(`[NORMALIZATION] Normalized magnitude: ${normalizedMagnitude.toFixed(6)} (should be ~1.0)`);
         
         console.log(`Successfully generated embedding with ${normalizedEmbedding.length} dimensions`);
         

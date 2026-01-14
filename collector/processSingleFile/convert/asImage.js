@@ -104,6 +104,7 @@ async function asImage({
   
   // Extract EXIF metadata if available
   const imageMetadata = await extractImageMetadata(fullFilePath);
+  console.log(`[DEBUG] Image metadata extracted:`, JSON.stringify(imageMetadata, null, 2));
   
   // Generate BlurHash if available
   let blurHash = null;
@@ -118,12 +119,32 @@ async function asImage({
     }
   }
   
+  // Build description from metadata (similar to mythingllm approach)
+  console.log(`[DEBUG] Building description from fullFilePath: ${fullFilePath}`);
+  const descriptionParts = [];
+  descriptionParts.push(`The photo has the title "${fullFilePath}"`);
+  console.log(`[DEBUG] Added title part: ${descriptionParts[0]}`);
+  if (imageMetadata.dateTime) {
+    descriptionParts.push(`and was created at ${imageMetadata.dateTime}`);
+    console.log(`[DEBUG] Added dateTime part: ${imageMetadata.dateTime}`);
+  }
+  const metadataParts = [];
+  if (imageMetadata.camera) metadataParts.push(`Camera: ${imageMetadata.camera}`);
+  if (imageMetadata.dimensions) metadataParts.push(`Dimensions: ${imageMetadata.dimensions}`);
+  if (imageMetadata.fileSize) metadataParts.push(`Size: ${imageMetadata.fileSize}`);
+  console.log(`[DEBUG] Metadata parts:`, metadataParts);
+  if (metadataParts.length > 0) {
+    descriptionParts.push(`. ${metadataParts.join(', ')}`);
+  }
+  const metadataDescription = descriptionParts.join(' ') + '.';
+  console.log(`[DEBUG] Final metadataDescription: ${metadataDescription}`);
+  
   const data = {
     id: v4(),
     url: "file://" + fullFilePath,
     title: metadata.title || filename,
     docAuthor: metadata.docAuthor || imageMetadata.camera || "Unknown",
-    description: metadata.description || "Unknown",
+    description: metadataDescription,  // Metadata-based description
     docSource: metadata.docSource || "image file uploaded by the user.",
     chunkSource: metadata.chunkSource || "",
     published: imageMetadata.dateTime || createdDate(fullFilePath),

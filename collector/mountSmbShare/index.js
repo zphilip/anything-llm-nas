@@ -511,7 +511,7 @@ async function processFilesInBatches(processId, activeProcesses, unprocessedFile
       activeProcesses.set(processId, { 
         ...activeProcesses.get(processId), 
         status: 'interrupted', 
-        progress: (i / totalFiles).toFixed(4), 
+        progress: ((i / totalFiles) * 100).toFixed(2),
         result: null, 
         timestamp: Date.now() 
       });
@@ -530,7 +530,7 @@ async function processFilesInBatches(processId, activeProcesses, unprocessedFile
     activeProcesses.set(processId, { 
       ...activeProcesses.get(processId), 
       status: 'running', 
-      progress: (i / totalFiles).toFixed(4), 
+      progress: ((i / totalFiles) * 100).toFixed(2),
       result: null, 
       timestamp: Date.now() 
     });
