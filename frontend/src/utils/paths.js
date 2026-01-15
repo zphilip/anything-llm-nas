@@ -119,6 +119,12 @@ export default {
     llmPreference: () => {
       return "/settings/llm-preference";
     },
+    multimodalPreference: () => {
+      return "/settings/multimodal-preference";
+    },
+    multimodalEmbedderPreference: () => {
+      return "/settings/multimodal-embedder-preference";
+    },
     transcriptionPreference: () => {
       return "/settings/transcription-preference";
     },

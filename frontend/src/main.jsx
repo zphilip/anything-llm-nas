@@ -88,6 +88,24 @@ const router = createBrowserRouter([
         },
       },
       {
+        path: "/settings/multimodal-preference",
+        lazy: async () => {
+          const { default: MultimodalPreference } = await import(
+            "@/pages/GeneralSettings/MultimodalPreference"
+          );
+          return { element: <AdminRoute Component={MultimodalPreference} /> };
+        },
+      },
+      {
+        path: "/settings/multimodal-embedder-preference",
+        lazy: async () => {
+          const { default: MultimodalEmbedderPreference } = await import(
+            "@/pages/GeneralSettings/MultimodalEmbedderPreference"
+          );
+          return { element: <AdminRoute Component={MultimodalEmbedderPreference} /> };
+        },
+      },
+      {
         path: "/settings/transcription-preference",
         lazy: async () => {
           const { default: GeneralTranscriptionPreference } = await import(

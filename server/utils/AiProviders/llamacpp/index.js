@@ -22,8 +22,8 @@ class LlamaCppAILLM {
     this.model = modelPreference || process.env.LLAMACPP_MODEL_PREF;
     this.performanceMode = process.env.LLAMACPP_PERFORMANCE_MODE || "base";
     this.keepAlive = process.env.LLAMACPP_KEEP_ALIVE_TIMEOUT ? Number(process.env.LLAMACPP_KEEP_ALIVE_TIMEOUT): 300; // Default 5-minute timeout for model loading.
-    this.image2text_basePath = `${process.env.IMAGE2TEXT_BASE_PATH}/v1/chat/completions`;    
-    this.image2text_model = process.env.IMAGE2TEXT_MODEL_PREF;
+    this.multimodal_basePath = process.env.MULTIMODAL_BASE_PATH || process.env.IMAGE2TEXT_BASE_PATH;    
+    this.multimodal_model = process.env.MULTIMODAL_MODEL_PREF || process.env.IMAGE2TEXT_MODEL_PREF;
 
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
@@ -575,9 +575,9 @@ class LlamaCppAILLM {
     const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 minutes timeout
 
     try {
-      // Get token limit for the image2text model
-      const contextSize = parseInt(process.env.IMAGE2TEXT_MODEL_TOKEN_LIMIT) || 4096;
-      const maxOutputTokens = parseInt(process.env.IMAGE2TEXT_MODEL_MAX_TOKENS) || 512;
+      // Get token limit for the multimodal model
+      const contextSize = parseInt(process.env.MULTIMODAL_MODEL_TOKEN_LIMIT || process.env.IMAGE2TEXT_MODEL_TOKEN_LIMIT) || 4096;
+      const maxOutputTokens = parseInt(process.env.MULTIMODAL_MODEL_MAX_TOKENS || process.env.IMAGE2TEXT_MODEL_MAX_TOKENS) || 512;
       
       // Resize image to fit within token budget
       console.log(`Resizing image to fit within ${contextSize} total tokens (${maxOutputTokens} reserved for output)...`);
@@ -587,7 +587,7 @@ class LlamaCppAILLM {
       const imageUrl = `data:image/jpeg;base64,${resizedBase64}`;
       
       const data = {
-        model: this.image2text_model,
+        model: this.multimodal_model,
         messages: [
           {
             role: "system",
@@ -605,9 +605,10 @@ class LlamaCppAILLM {
         temperature: 0.7
       };
 
-      console.log(`Sending image description request to ${this.image2text_basePath} for model ${this.image2text_model}`);
+      const apiUrl = `${this.multimodal_basePath}/v1/chat/completions`;
+      console.log(`Sending image description request to ${apiUrl} for model ${this.multimodal_model}`);
       
-      const response = await fetch(this.image2text_basePath, {
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

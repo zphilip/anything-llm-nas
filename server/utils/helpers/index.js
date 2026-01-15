@@ -504,6 +504,103 @@ function toChunks(arr, size) {
   );
 }
 
+/**
+ * Returns the MultimodalLLMProvider with its embedder attached via system or via defined provider.
+ * For models that can handle both text and image inputs (vision models).
+ * @param {{provider: string | null, model: string | null} | null} params - Initialize params for multimodal LLMs provider
+ * @returns {Promise<BaseLLMProvider>}
+ */
+async function getMultimodalLLMProvider({ provider = null, model = null } = {}) {
+  const { SystemSettings } = require("../../models/systemSettings");
+  const multimodalSettings = await SystemSettings.multimodalPreferenceKeys();
+  
+  // Load multimodal settings into process.env for provider initialization
+  if (multimodalSettings.MultimodalProvider) process.env.MULTIMODAL_PROVIDER = multimodalSettings.MultimodalProvider;
+  if (multimodalSettings.MultimodalBasePath) process.env.MULTIMODAL_BASE_PATH = multimodalSettings.MultimodalBasePath;
+  if (multimodalSettings.MultimodalModelPref) process.env.MULTIMODAL_MODEL_PREF = multimodalSettings.MultimodalModelPref;
+  if (multimodalSettings.MultimodalModelTokenLimit) process.env.MULTIMODAL_MODEL_TOKEN_LIMIT = multimodalSettings.MultimodalModelTokenLimit;
+  if (multimodalSettings.MultimodalModelMaxChunkLength) process.env.MULTIMODAL_MODEL_MAX_CHUNK_LENGTH = multimodalSettings.MultimodalModelMaxChunkLength;
+  if (multimodalSettings.MultimodalModelMaxTokens) process.env.MULTIMODAL_MODEL_MAX_TOKENS = multimodalSettings.MultimodalModelMaxTokens;
+  if (multimodalSettings.MultimodalModelPerformanceMode) process.env.MULTIMODAL_MODEL_PERFORMANCE_MODE = multimodalSettings.MultimodalModelPerformanceMode;
+  if (multimodalSettings.MultimodalModelKeepAliveTimeout) process.env.MULTIMODAL_MODEL_KEEP_ALIVE_TIMEOUT = multimodalSettings.MultimodalModelKeepAliveTimeout;
+  
+  const multimodalSelection = provider ?? process.env.MULTIMODAL_PROVIDER ?? process.env.IMAGE2TEXT_ENGINE ?? process.env.LLM_PROVIDER ?? "llamacpp";
+  const embedder = getEmbeddingEngineSelection();
+
+  switch (multimodalSelection) {
+    case "openai":
+      const { OpenAiLLM } = require("../AiProviders/openAi");
+      return new OpenAiLLM(embedder, model);
+    case "azure":
+      const { AzureOpenAiLLM } = require("../AiProviders/azureOpenAi");
+      return new AzureOpenAiLLM(embedder, model);
+    case "anthropic":
+      const { AnthropicLLM } = require("../AiProviders/anthropic");
+      return new AnthropicLLM(embedder, model);
+    case "gemini":
+      const { GeminiLLM } = require("../AiProviders/gemini");
+      return new GeminiLLM(embedder, model);
+    case "ollama":
+      const { OllamaAILLM } = require("../AiProviders/ollama");
+      return new OllamaAILLM(embedder, model);
+    case "llamacpp":
+      const { LlamaCppAILLM } = require("../AiProviders/llamacpp");
+      return new LlamaCppAILLM(embedder, model);
+    default:
+      // Fallback to standard LLM provider
+      return getLLMProvider({ provider: multimodalSelection, model });
+  }
+}
+
+/**
+ * Returns the MultimodalLLMProviderClass - this is a helper method to access static methods on a multimodal class
+ * @param {{provider: string | null} | null} params - Initialize params for multimodal LLMs provider
+ * @returns {BaseLLMProviderClass}
+ */
+function getMultimodalLLMProviderClass({ provider = null } = {}) {
+  const multimodalSelection = provider ?? process.env.MULTIMODAL_PROVIDER ?? process.env.IMAGE2TEXT_ENGINE ?? process.env.LLM_PROVIDER ?? "llamacpp";
+
+  switch (multimodalSelection) {
+    case "openai":
+      const { OpenAiLLM } = require("../AiProviders/openAi");
+      return OpenAiLLM;
+    case "azure":
+      const { AzureOpenAiLLM } = require("../AiProviders/azureOpenAi");
+      return AzureOpenAiLLM;
+    case "anthropic":
+      const { AnthropicLLM } = require("../AiProviders/anthropic");
+      return AnthropicLLM;
+    case "gemini":
+      const { GeminiLLM } = require("../AiProviders/gemini");
+      return GeminiLLM;
+    case "ollama":
+      const { OllamaAILLM } = require("../AiProviders/ollama");
+      return OllamaAILLM;
+    case "llamacpp":
+      const { LlamaCppAILLM } = require("../AiProviders/llamacpp");
+      return LlamaCppAILLM;
+    default:
+      // Fallback to standard LLM provider class
+      return getLLMProviderClass({ provider: multimodalSelection });
+  }
+}
+
+/**
+ * Returns the defined model (if available) for the given multimodal provider.
+ * @param {{provider: string | null} | null} params - Initialize params for multimodal LLMs provider
+ * @returns {string | null}
+ */
+function getBaseMultimodalProviderModel({ provider = null } = {}) {
+  const multimodalSelection = provider ?? process.env.MULTIMODAL_PROVIDER ?? process.env.IMAGE2TEXT_ENGINE ?? process.env.LLM_PROVIDER ?? "llamacpp";
+  
+  // First check for multimodal-specific model preference (with backwards compatibility)
+  const multimodalModelPref = process.env.MULTIMODAL_MODEL_PREF || process.env.IMAGE2TEXT_MODEL_PREF;
+  if (multimodalModelPref) return multimodalModelPref;
+  
+  // Fallback to provider-specific model
+  return getBaseLLMProviderModel({ provider: multimodalSelection });
+}
+
 module.exports = {
   getEmbeddingEngineSelection,
   maximumChunkLength,
@@ -511,5 +608,8 @@ module.exports = {
   getLLMProviderClass,
   getBaseLLMProviderModel,
   getLLMProvider,
+  getMultimodalLLMProvider,
+  getMultimodalLLMProviderClass,
+  getBaseMultimodalProviderModel,
   toChunks,
 };

@@ -1,5 +1,5 @@
 const lancedb = require("@lancedb/lancedb");
-const { toChunks, getEmbeddingEngineSelection, getLLMProvider } = require("../../helpers");
+const { toChunks, getEmbeddingEngineSelection, getLLMProvider, getMultimodalLLMProvider } = require("../../helpers");
 const { TextSplitter } = require("../../TextSplitter");
 const { SystemSettings } = require("../../../models/systemSettings");
 const { storeVectorResult, cachedVectorInformation } = require("../../files");
@@ -416,7 +416,7 @@ const LanceDb = {
       // because we then cannot atomically control our namespace to granularly find/remove documents
       // from vectordb.
       const EmbedderEngine = getEmbeddingEngineSelection();
-      const imageDescribeEngine = getLLMProvider();
+      const imageDescribeEngine = await getMultimodalLLMProvider();
       
       // Check fileType from metadata (set by collector) instead of checking file extension
       const fileType = metadata.fileType || (isImage(fullFilePath) ? "image" : "text");

@@ -149,21 +149,13 @@ export function ImageGridV3({ images = [], setCurrentImage ,isLoading}) {
     // Filter out null or undefined values from safeImages
     const filteredImages = safeImages.filter(image => image !== null && image !== undefined);
 
-    // Calculate the number of rows
+    // Images are already sorted by parent component, no need to sort again
     const totalImages = filteredImages.length;
     const rowLines = Math.ceil(totalImages / columns);
-    console.log(`Total images: ${totalImages}, Row lines: ${rowLines}`); // Debugging log
+    console.log(`Total images: ${totalImages}, Row lines: ${rowLines}, pre-sorted by distance`);
 
-    // Create a new array to hold the images in column-wise order
-    const displayedImages = [];
-    for (let j = 0; j < columns; j++) {
-        for (let i = 0; i < rowLines; i++) {
-            const index = i * columns + j; // Calculate the index for the original images array
-            if (index < totalImages) { // Ensure it's not null or undefined
-                displayedImages.push(filteredImages[index]);
-            }
-        }
-    }
+    // Use filtered images directly (already sorted by parent)
+    const displayedImages = filteredImages;
 
     if (isLoading && displayedImages.length === 0) {
         return <EmptyGridMessage message="Loading images..." />;
@@ -182,15 +174,22 @@ export function ImageGridV3({ images = [], setCurrentImage ,isLoading}) {
     }
 
     return (
-        <div className="columns-2 gap-4 sm:columns-3 xl:columns-4 2xl:columns-5 bg-black">
-            {displayedImages.map(({ image_name, image_description, image_base64, _distance }) => {
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 bg-black">
+            {displayedImages.map(({ image_name, image_description, image_base64, _distance }, index) => {
                 const formatDistance = (distance) => (distance != null ? distance.toFixed(2) : 'N/A');
 
                 return (
                     <div
-                        key={image_name}
+                        key={`${image_name}-${index}`}
                         className='after:content group cursor-pointer relative mb-4 block w-full after:pointer-events-none after:absolute after:inset-0 after:rounded-lg after:shadow-highlight'
                         onClick={() => {
+                            console.log('[ImageGrid Click] Clicked image:', {
+                                image_name,
+                                image_description,
+                                has_base64: !!image_base64,
+                                base64_length: image_base64?.length,
+                                _distance
+                            });
                             setCurrentImage({
                                 image_name,
                                 image_description,

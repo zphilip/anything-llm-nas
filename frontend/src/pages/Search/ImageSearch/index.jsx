@@ -116,7 +116,7 @@ export default function ImageSearch() {
 
       console.log(`[loadBase64Images] Loaded ${loadedImages.filter(Boolean).length} out of ${rawImages.length} images`);
 
-      // Filter out failed loads and sort by distance
+      // Filter out failed loads (do NOT sort here - sorting happens in pagination)
       const validImages = loadedImages
         .filter(Boolean)
         .map((img) => ({
@@ -125,16 +125,9 @@ export default function ImageSearch() {
             img._distance !== undefined && img._distance !== null
               ? img._distance
               : null,
-        }))
-        .sort((a, b) => {
-          if (a._distance == null) return 1;
-          if (b._distance == null) return -1;
-          return searchDistance === DISTANCE.COSINE
-            ? b._distance - a._distance
-            : a._distance - b._distance;
-        });
+        }));
 
-      console.log(`[loadBase64Images] Returning ${validImages.length} valid images`);
+      console.log(`[loadBase64Images] Returning ${validImages.length} valid images (unsorted)`);
       console.log(`[loadBase64Images] First valid image:`, validImages[0]);
       return validImages;
     } catch (error) {
@@ -176,7 +169,33 @@ export default function ImageSearch() {
               event.data.output
             );
             console.log("[Worker Complete] Processed results:", processedResults?.length || 0, "items");
-            setProcessedImages(processedResults || []);
+            console.log("[Worker Complete] First 5 distances:", processedResults?.slice(0, 5).map(img => img._distance));
+            
+            // Filter by distance threshold for cosine similarity (< 0.5)
+            // Note: Lower cosine distance = more similar
+            const distanceThreshold = searchDistance === 'cosine' ? 0.5 : Infinity;
+            const filteredResults = (processedResults || []).filter(result => {
+              const distance = result._distance;
+              return distance !== null && distance !== undefined && distance < distanceThreshold;
+            });
+            
+            console.log(`[Distance Filter] Original: ${processedResults?.length || 0}, After filtering (< ${distanceThreshold}): ${filteredResults.length}`);
+            
+            // Deduplicate results based on image_name (file path)
+            const deduplicatedResults = [];
+            const seenImages = new Set();
+            
+            for (const result of filteredResults) {
+              if (!seenImages.has(result.image_name)) {
+                seenImages.add(result.image_name);
+                deduplicatedResults.push(result);
+              }
+            }
+            
+            console.log("[Deduplication] Original count:", processedResults?.length || 0, "Deduplicated count:", deduplicatedResults.length);
+            
+            setProcessedImages(deduplicatedResults);
+            console.log("[Worker Complete] setProcessedImages called with", deduplicatedResults.length, "images");
           } else {
             console.log(
               "Ignoring outdated search results",
@@ -274,12 +293,46 @@ export default function ImageSearch() {
 
   // Calculate paginated images
   const paginatedImages = useMemo(() => {
-    if (!processedImages || processedImages.length === 0) return [];
+    console.log("[paginatedImages memo] Running with:", {
+      processedImagesLength: processedImages?.length,
+      currentPage,
+      itemsPerPage
+    });
+    
+    if (!processedImages || processedImages.length === 0) {
+      console.log("[paginatedImages memo] No images to process");
+      return [];
+    }
+
+    // Log distances BEFORE sorting
+    console.log("[paginatedImages memo] BEFORE sort - First 10 distances:", 
+      processedImages.slice(0, 10).map((img, idx) => `[${idx}]: ${img._distance?.toFixed(2)}`)
+    );
+
+    // Sort images by distance first (ascending order - smaller distance = more relevant)
+    const sortedImages = [...processedImages].sort((a, b) => {
+      const distanceA = a._distance ?? Infinity;
+      const distanceB = b._distance ?? Infinity;
+      return distanceA - distanceB;
+    });
+
+    // Log distances AFTER sorting
+    console.log("[paginatedImages memo] AFTER sort - First 10 distances:", 
+      sortedImages.slice(0, 10).map((img, idx) => `[${idx}]: ${img._distance?.toFixed(2)}`)
+    );
 
     const startIndex = (currentPage - 1) * itemsPerPage;
     const endIndex = startIndex + itemsPerPage;
 
-    return processedImages.slice(startIndex, endIndex);
+    console.log("[paginatedImages memo] Slicing from", startIndex, "to", endIndex);
+    const result = sortedImages.slice(startIndex, endIndex);
+    
+    console.log("[paginatedImages memo] Returning", result.length, "images for page", currentPage);
+    console.log("[paginatedImages memo] Page distances:", 
+      result.map((img, idx) => `[${idx}]: ${img._distance?.toFixed(2)}`)
+    );
+
+    return result;
   }, [processedImages, currentPage, itemsPerPage]);
 
   // Update total pages when items per page or total images change
@@ -293,6 +346,8 @@ export default function ImageSearch() {
 
   // Handle page change
   const handlePageChange = (pageNumber) => {
+    console.log("[handlePageChange] Changing from page", currentPage, "to", pageNumber);
+    console.log("[handlePageChange] processedImages length:", processedImages?.length);
     setCurrentPage(pageNumber);
     // Scroll to top of results when changing page
     window.scrollTo({ top: 0, behavior: "smooth" });

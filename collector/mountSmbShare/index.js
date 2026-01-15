@@ -527,10 +527,12 @@ async function processFilesInBatches(processId, activeProcesses, unprocessedFile
       BATCH_SIZE * 180000
     );
     
+    // Calculate progress based on completed files (i + batch size), not starting index
+    const completedFiles = Math.min(i + currentBatch.length, totalFiles);
     activeProcesses.set(processId, { 
       ...activeProcesses.get(processId), 
       status: 'running', 
-      progress: ((i / totalFiles) * 100).toFixed(2),
+      progress: ((completedFiles / totalFiles) * 100).toFixed(2),
       result: null, 
       timestamp: Date.now() 
     });

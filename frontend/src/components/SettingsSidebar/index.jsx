@@ -227,6 +227,12 @@ const SidebarOptions = ({ user = null, t }) => (
               roles: ["admin"],
             },
             {
+              btnText: "Multimodal Model",
+              href: paths.settings.multimodalPreference(),
+              flex: true,
+              roles: ["admin"],
+            },
+            {
               btnText: t("settings.vector-database"),
               href: paths.settings.vectorDatabase(),
               flex: true,
@@ -235,6 +241,12 @@ const SidebarOptions = ({ user = null, t }) => (
             {
               btnText: t("settings.embedder"),
               href: paths.settings.embedder.modelPreference(),
+              flex: true,
+              roles: ["admin"],
+            },
+            {
+              btnText: "Multimodal Embedder",
+              href: paths.settings.multimodalEmbedderPreference(),
               flex: true,
               roles: ["admin"],
             },

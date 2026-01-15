@@ -334,6 +334,58 @@ const KEY_MAPPING = {
     checks: [nonZero],
   },
 
+  // Multimodal Model Settings
+  MultimodalProvider: {
+    envKey: "MULTIMODAL_PROVIDER",
+    checks: [],
+  },
+  MultimodalBasePath: {
+    envKey: "MULTIMODAL_BASE_PATH",
+    checks: [validDockerizedUrl],
+  },
+  MultimodalModelPref: {
+    envKey: "MULTIMODAL_MODEL_PREF",
+    checks: [],
+  },
+  MultimodalModelTokenLimit: {
+    envKey: "MULTIMODAL_MODEL_TOKEN_LIMIT",
+    checks: [nonZero],
+  },
+  MultimodalModelMaxChunkLength: {
+    envKey: "MULTIMODAL_MODEL_MAX_CHUNK_LENGTH",
+    checks: [nonZero],
+  },
+  MultimodalModelMaxTokens: {
+    envKey: "MULTIMODAL_MODEL_MAX_TOKENS",
+    checks: [nonZero],
+  },
+  MultimodalModelPerformanceMode: {
+    envKey: "MULTIMODAL_MODEL_PERFORMANCE_MODE",
+    checks: [],
+  },
+  MultimodalModelKeepAliveTimeout: {
+    envKey: "MULTIMODAL_MODEL_KEEP_ALIVE_TIMEOUT",
+    checks: [],
+  },
+
+  // Multimodal Embedder Settings
+  MultimodalEmbedderProvider: {
+    envKey: "MULTIMODAL_EMBEDDER_PROVIDER",
+    checks: [],
+  },
+  MultimodalEmbedderBasePath: {
+    envKey: "MULTIMODAL_EMBEDDER_BASE_PATH",
+    checks: [validDockerizedUrl],
+  },
+  MultimodalEmbedderModelPref: {
+    envKey: "MULTIMODAL_EMBEDDER_MODEL_PREF",
+    checks: [],
+  },
+  MultimodalEmbedderMaxChunkLength: {
+    envKey: "MULTIMODAL_EMBEDDER_MAX_CHUNK_LENGTH",
+    checks: [nonZero],
+  },
+
   // Gemini Embedding Settings
   GeminiEmbeddingApiKey: {
     envKey: "GEMINI_EMBEDDING_API_KEY",

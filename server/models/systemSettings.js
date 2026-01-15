@@ -56,6 +56,22 @@ const SystemSettings = {
     "meta_page_title",
     "meta_page_favicon",
 
+    // Multimodal model settings
+    "MultimodalProvider",
+    "MultimodalBasePath",
+    "MultimodalModelPref",
+    "MultimodalModelTokenLimit",
+    "MultimodalModelMaxChunkLength",
+    "MultimodalModelMaxTokens",
+    "MultimodalModelPerformanceMode",
+    "MultimodalModelKeepAliveTimeout",
+
+    // Multimodal embedder settings
+    "MultimodalEmbedderProvider",
+    "MultimodalEmbedderBasePath",
+    "MultimodalEmbedderModelPref",
+    "MultimodalEmbedderMaxChunkLength",
+
     // beta feature flags
     "experimental_live_file_sync",
 
@@ -208,6 +224,8 @@ const SystemSettings = {
     const llmProvider = process.env.LLM_PROVIDER;
     const vectorDB = process.env.VECTOR_DB;
     const embeddingEngine = process.env.EMBEDDING_ENGINE ?? "native";
+    const multimodalKeys = await this.multimodalPreferenceKeys();
+    const multimodalEmbedderKeys = await this.multimodalEmbedderPreferenceKeys();
     return {
       // --------------------------------------------------------
       // General Settings
@@ -252,6 +270,16 @@ const SystemSettings = {
       LLMProvider: llmProvider,
       LLMModel: getBaseLLMProviderModel({ provider: llmProvider }) || null,
       ...this.llmPreferenceKeys(),
+
+      // --------------------------------------------------------
+      // Multimodal Provider Selection Settings & Configs
+      // --------------------------------------------------------
+      ...multimodalKeys,
+
+      // --------------------------------------------------------
+      // Multimodal Embedder Provider Selection Settings & Configs
+      // --------------------------------------------------------
+      ...multimodalEmbedderKeys,
 
       // --------------------------------------------------------
       // Whisper (Audio transcription) Selection Settings & Configs
@@ -653,6 +681,88 @@ const SystemSettings = {
       GiteeAIApiKey: !!process.env.GITEE_AI_API_KEY,
       GiteeAIModelPref: process.env.GITEE_AI_MODEL_PREF,
       GiteeAITokenLimit: process.env.GITEE_AI_MODEL_TOKEN_LIMIT || 8192,
+    };
+  },
+
+  multimodalPreferenceKeys: async function () {
+    // Check both database and environment variables (with backwards compatibility)
+    const getSettingValue = async (dbLabel, envKey, fallback = null) => {
+      const dbValue = (await this.get({ label: dbLabel }))?.value;
+      return dbValue || process.env[envKey] || fallback;
+    };
+
+    return {
+      MultimodalProvider: await getSettingValue(
+        "MultimodalProvider",
+        "MULTIMODAL_PROVIDER",
+        process.env.IMAGE2TEXT_ENGINE || "llamacpp"
+      ),
+      MultimodalBasePath: await getSettingValue(
+        "MultimodalBasePath",
+        "MULTIMODAL_BASE_PATH",
+        process.env.IMAGE2TEXT_BASE_PATH
+      ),
+      MultimodalModelPref: await getSettingValue(
+        "MultimodalModelPref",
+        "MULTIMODAL_MODEL_PREF",
+        process.env.IMAGE2TEXT_MODEL_PREF
+      ),
+      MultimodalModelTokenLimit: await getSettingValue(
+        "MultimodalModelTokenLimit",
+        "MULTIMODAL_MODEL_TOKEN_LIMIT",
+        process.env.IMAGE2TEXT_MODEL_TOKEN_LIMIT || "4096"
+      ),
+      MultimodalModelMaxChunkLength: await getSettingValue(
+        "MultimodalModelMaxChunkLength",
+        "MULTIMODAL_MODEL_MAX_CHUNK_LENGTH",
+        process.env.IMAGE2TEXT_MODEL_MAX_CHUNK_LENGTH || "8192"
+      ),
+      MultimodalModelMaxTokens: await getSettingValue(
+        "MultimodalModelMaxTokens",
+        "MULTIMODAL_MODEL_MAX_TOKENS",
+        process.env.IMAGE2TEXT_MODEL_MAX_TOKENS || "1536"
+      ),
+      MultimodalModelPerformanceMode: await getSettingValue(
+        "MultimodalModelPerformanceMode",
+        "MULTIMODAL_MODEL_PERFORMANCE_MODE",
+        process.env.IMAGE2TEXT_MODEL_PERFORMANCE_MODE || "base"
+      ),
+      MultimodalModelKeepAliveTimeout: await getSettingValue(
+        "MultimodalModelKeepAliveTimeout",
+        "MULTIMODAL_MODEL_KEEP_ALIVE_TIMEOUT",
+        process.env.IMAGE2TEXT_MODEL_KEEP_ALIVE_TIMEOUT || "300"
+      ),
+    };
+  },
+
+  multimodalEmbedderPreferenceKeys: async function () {
+    // Check both database and environment variables
+    const getSettingValue = async (dbLabel, envKey, fallback = null) => {
+      const dbValue = (await this.get({ label: dbLabel }))?.value;
+      return dbValue || process.env[envKey] || fallback;
+    };
+
+    return {
+      MultimodalEmbedderProvider: await getSettingValue(
+        "MultimodalEmbedderProvider",
+        "MULTIMODAL_EMBEDDER_PROVIDER",
+        "llamacpp"
+      ),
+      MultimodalEmbedderBasePath: await getSettingValue(
+        "MultimodalEmbedderBasePath",
+        "MULTIMODAL_EMBEDDER_BASE_PATH",
+        null
+      ),
+      MultimodalEmbedderModelPref: await getSettingValue(
+        "MultimodalEmbedderModelPref",
+        "MULTIMODAL_EMBEDDER_MODEL_PREF",
+        null
+      ),
+      MultimodalEmbedderMaxChunkLength: await getSettingValue(
+        "MultimodalEmbedderMaxChunkLength",
+        "MULTIMODAL_EMBEDDER_MAX_CHUNK_LENGTH",
+        "8192"
+      ),
     };
   },
 
