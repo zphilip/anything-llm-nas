@@ -1,5 +1,5 @@
 import { CloudArrowUp } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import showToast from "../../../../../utils/toast";
 import System from "../../../../../models/system";
@@ -19,6 +19,8 @@ export default function UploadFile({
   const [ready, setReady] = useState(false);
   const [files, setFiles] = useState([]);
   const [fetchingUrl, setFetchingUrl] = useState(false);
+  const [useOCR, setUseOCR] = useState(false);
+  const fileInputRef = useRef(null);
 
   const handleSendLink = async (e) => {
     e.preventDefault();
@@ -44,7 +46,8 @@ export default function UploadFile({
 
   // Queue all fetchKeys calls through the same debouncer to prevent spamming the server.
   // either a success or error will trigger a fetchKeys call so the UI is not stuck loading.
-  const debouncedFetchKeys = debounce(() => fetchKeys(true), 1000);
+  // Pass true for rescan to ensure newly uploaded files appear immediately
+  const debouncedFetchKeys = debounce(() => fetchKeys(true, true), 1000);
   const handleUploadSuccess = () => debouncedFetchKeys();
   const handleUploadError = () => debouncedFetchKeys();
 
@@ -78,6 +81,24 @@ export default function UploadFile({
     onDrop,
     disabled: !ready,
   });
+
+  const handleDirectoryUpload = (event) => {
+    const selectedFiles = Array.from(event.target.files);
+  
+    if (selectedFiles.length === 0) return;
+  
+    const newFiles = selectedFiles.map((file) => ({
+      uid: v4(),
+      file: file,
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      rejected: false,
+      reason: "",
+    }));
+  
+    setFiles((prevFiles) => [...prevFiles, ...newFiles]);
+  };
 
   return (
     <div>
@@ -125,6 +146,7 @@ export default function UploadFile({
                 onUploadError={handleUploadError}
                 setLoading={setLoading}
                 setLoadingMessage={setLoadingMessage}
+                useOCR={useOCR}
               />
             ))}
           </div>
@@ -152,6 +174,40 @@ export default function UploadFile({
             : t("connectors.upload.fetch-website")}
         </button>
       </form>
+      <div className="mt-3 flex gap-x-2">
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()} 
+          disabled={!ready}
+          className="disabled:bg-white/20 disabled:text-slate-300 disabled:border-slate-400 disabled:cursor-not-allowed bg-transparent hover:bg-slate-200 hover:text-slate-800 w-auto border border-white light:border-theme-modal-border text-sm text-white p-2.5 rounded-lg"
+        >
+          {t("connectors.upload.upload-directory", "Upload Directory")}
+        </button>
+        <input
+          type="file"
+          ref={fileInputRef}
+          webkitdirectory=""
+          directory=""
+          multiple
+          onChange={handleDirectoryUpload}
+          className="hidden"
+        />
+      </div>
+      <div className="mt-3 flex items-center gap-x-2">
+        <input
+          type="checkbox"
+          id="useOCR"
+          checked={useOCR}
+          onChange={(e) => setUseOCR(e.target.checked)}
+          className="w-4 h-4 rounded border-white/20 bg-theme-settings-input-bg text-primary-button focus:ring-primary-button focus:ring-2"
+        />
+        <label
+          htmlFor="useOCR"
+          className="text-white text-sm cursor-pointer select-none"
+        >
+          {t("connectors.upload.use-ocr", "Use OCR (extract text from images instead of using image embeddings)")}
+        </label>
+      </div>
       <div className="mt-6 text-center text-white text-opacity-80 text-xs font-medium w-[560px]">
         {t("connectors.upload.privacy-notice")}
       </div>

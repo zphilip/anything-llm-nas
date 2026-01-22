@@ -16,6 +16,7 @@ import { filterFileSearchResults } from "./utils";
 import ContextMenu from "./ContextMenu";
 import { Tooltip } from "react-tooltip";
 import { safeJsonParse } from "@/utils/request";
+import { deleteDocsCache } from '../DocumentsCache';
 
 function Directory({
   files,
@@ -194,35 +195,31 @@ function Directory({
   };
   const handleResync = async () => {
     try {
-      setLoading(true);
-      setLoadingMessage(t("connectors.directory.resyncing") || "Rescanning documents from disk...");
-      // Fetch keys with rescan set to true to force disk scan
+      // Clear cache using the proper function
+      await deleteDocsCache();
+      // Fetch keys with rescan
       await fetchKeys(true, true);
       showToast(t("connectors.directory.resync-success") || "Documents resynced successfully", "success");
     } catch (error) {
       console.error('Resync failed:', error);
       showToast(t("connectors.directory.resync-error") || "Failed to resync documents", "error");
-    } finally {
-      setLoading(false);
-      setLoadingMessage("");
     }
   };
   return (
     <>
+      {/* Resync Button - Positioned at top-left with extra spacing */}
+      <button
+        onClick={handleResync}
+        className="absolute -top-10 left-8 border-none flex items-center gap-x-2 cursor-pointer px-[14px] py-[7px] rounded-lg hover:bg-theme-sidebar-subitem-hover z-30"
+        title={t("connectors.directory.resync") || "Resync documents"}
+      >
+        <ArrowsClockwise className="w-5 h-5 text-white" />
+        <span className="text-white">Resync</span>
+      </button>
       <div className="px-8 pb-8" onContextMenu={handleContextMenu}>
         <div className="flex flex-col gap-y-6">
           <div className="flex items-center justify-between w-[560px] px-5 relative">
-            {/* Resync Button */}
-            <button
-              onClick={handleResync}
-              disabled={loading}
-              className="absolute left-0 border-none flex items-center gap-x-2 cursor-pointer px-[14px] py-[7px] rounded-lg hover:bg-theme-sidebar-subitem-hover disabled:opacity-50 disabled:cursor-not-allowed z-20"
-              title={t("connectors.directory.resync") || "Resync documents from disk"}
-            >
-              <ArrowsClockwise className="w-5 h-5" />
-              <span className="text-sm">{t("connectors.directory.resync-button") || "Resync"}</span>
-            </button>
-            <h3 className="text-white text-base font-bold ml-28">
+            <h3 className="text-white text-base font-bold">
               {t("connectors.directory.my-documents")}
             </h3>
             <div className="relative">

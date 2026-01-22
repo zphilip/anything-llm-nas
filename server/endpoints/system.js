@@ -1,7 +1,7 @@
 process.env.NODE_ENV === "development"
   ? require("dotenv").config({ path: `.env.${process.env.NODE_ENV}` })
   : require("dotenv").config();
-const { viewLocalFiles, normalizePath, isWithin } = require("../utils/files");
+const { viewLocalFiles, normalizePath, isWithin, purgeEntireVectorCache } = require("../utils/files");
 const { purgeDocument, purgeFolder } = require("../utils/files/purgeDocument");
 const { getVectorDbClass } = require("../utils/helpers");
 const { updateENV, dumpENV } = require("../utils/helpers/updateENV");
@@ -464,6 +464,25 @@ function systemEndpoints(app) {
       } catch (e) {
         console.error(e.message, e);
         response.sendStatus(500).end();
+      }
+    }
+  );
+
+  app.post(
+    "/system/clear-vector-cache",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        console.log('🗑️ Clearing entire vector cache...');
+        purgeEntireVectorCache();
+        console.log('✅ Vector cache cleared successfully');
+        response.status(200).json({ 
+          success: true, 
+          message: "Vector cache cleared. Documents will be re-embedded on next addition." 
+        });
+      } catch (e) {
+        console.error('❌ Error clearing vector cache:', e.message, e);
+        response.status(500).json({ success: false, error: e.message });
       }
     }
   );

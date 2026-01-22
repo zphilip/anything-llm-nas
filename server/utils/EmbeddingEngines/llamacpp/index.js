@@ -487,6 +487,270 @@ class LlamaCppEmbedder {
     return results;
   }
   
+  /**
+   * Embeds an image directly using a multimodal embedder endpoint.
+   * @param {string} base64Image - The base64 encoded image content (with or without data URI prefix).
+   * @param {string} basePath - The base path of the multimodal embedder (e.g., http://192.168.1.35:8081).
+   * @param {string} model - The model name to use for embedding.
+   * @param {number} maxSize - Maximum width/height for resizing (default: 768).
+   * @returns {Promise<number[]>} - A promise that resolves to the image embedding vector.
+   */
+  /**
+   * Resizes an image to fit within maxSize while maintaining aspect ratio.
+   * @param {string} base64Image - The base64 encoded image (with or without data URI prefix).
+   * @param {number} maxSize - Maximum width/height.
+   * @returns {Promise<string>} - Resized base64 image (without data URI prefix).
+   */
+  async #resizeImageForEmbedding(base64Image, maxSize) {
+    try {
+      const sharp = require('sharp');
+      
+      // Remove data URI prefix if present
+      let base64Data = base64Image;
+      if (base64Image.startsWith('data:')) {
+        base64Data = base64Image.split(',')[1];
+      }
+      
+      // Decode base64 to buffer
+      const imageBuffer = Buffer.from(base64Data, 'base64');
+      
+      console.log(`[MULTIMODAL EMBEDDER] Original image size: ${(imageBuffer.length / 1024).toFixed(2)} KB`);
+      
+      // Get image metadata to check dimensions
+      const metadata = await sharp(imageBuffer).metadata();
+      console.log(`[MULTIMODAL EMBEDDER] Original dimensions: ${metadata.width}x${metadata.height}`);
+      
+      // Only resize if image is larger than maxSize
+      if (metadata.width <= maxSize && metadata.height <= maxSize) {
+        console.log(`[MULTIMODAL EMBEDDER] Image already within ${maxSize}px, no resize needed`);
+        return base64Data;
+      }
+      
+      // Resize image maintaining aspect ratio
+      // fit: 'inside' ensures the image fits within maxSize x maxSize while preserving aspect ratio
+      const resizedBuffer = await sharp(imageBuffer)
+        .resize(maxSize, maxSize, {
+          fit: 'inside',  // Preserve aspect ratio, fit within bounds
+          withoutEnlargement: true  // Don't enlarge if already smaller
+        })
+        .png()
+        .toBuffer();
+      
+      // Get resized dimensions to verify aspect ratio is preserved
+      const resizedMetadata = await sharp(resizedBuffer).metadata();
+      const originalRatio = (metadata.width / metadata.height).toFixed(3);
+      const resizedRatio = (resizedMetadata.width / resizedMetadata.height).toFixed(3);
+      
+      const resizedBase64 = resizedBuffer.toString('base64');
+      console.log(`[MULTIMODAL EMBEDDER] Resized image size: ${(resizedBuffer.length / 1024).toFixed(2)} KB`);
+      console.log(`[MULTIMODAL EMBEDDER] Resized dimensions: ${resizedMetadata.width}x${resizedMetadata.height}`);
+      console.log(`[MULTIMODAL EMBEDDER] Aspect ratio - Original: ${originalRatio}, Resized: ${resizedRatio} ✓ Preserved`);
+      
+      return resizedBase64;
+    } catch (error) {
+      console.warn(`[MULTIMODAL EMBEDDER] Failed to resize image: ${error.message}`);
+      console.warn(`[MULTIMODAL EMBEDDER] Using original image`);
+      // Return original if resize fails
+      return base64Image.startsWith('data:') ? base64Image.split(',')[1] : base64Image;
+    }
+  }
+
+  async embedImageDirect(base64Image, basePath, model, description = "", maxSize = 512) {
+    try {
+      console.log(`[MULTIMODAL EMBEDDER] Starting direct image embedding...`);
+      console.log(`[MULTIMODAL EMBEDDER] Max resize dimension: ${maxSize}px`);
+      console.log(`[MULTIMODAL EMBEDDER] Base Path: ${basePath}`);
+      console.log(`[MULTIMODAL EMBEDDER] Model: ${model}`);
+      console.log(`[MULTIMODAL EMBEDDER] Description: ${description}`);
+      
+      
+      // Resize image to reduce token count - use even smaller size for LFM models
+      // LFM models may have smaller context windows, so we need more aggressive resizing
+      const resizedBase64 = await this.#resizeImageForEmbedding(base64Image, maxSize);
+      console.log(`[MULTIMODAL EMBEDDER] Resized base64: ${resizedBase64.substring(0, 60)}... (length: ${resizedBase64.length} chars)`);
+      // Ensure we have the full data URI format (llamacpp expects "data:image/png;base64,...")
+      const dataURI = resizedBase64.startsWith('data:') 
+        ? resizedBase64
+        : `data:image/png;base64,${resizedBase64}`;
+
+      const embedUrl = `${basePath}/embedding`;
+      
+      // Use the correct llamacpp vision embeddings API format
+      // Based on llamacpp test: test_vision_embeddings
+      // Payload structure: { content: [{ prompt_string: "text <__media__>", multimodal_data: [base64] }] }
+      // CRITICAL: prompt_string must include marker <__media__> to reference the image
+      // let description = "what's the image about?";
+      const promptText = description ? `${description} <__media__>` : "<__media__>";
+      
+      const payload = {
+        content: [
+          {
+            prompt_string: promptText,  // Description + <__media__> marker
+            multimodal_data: [resizedBase64]  // Raw base64 (no data URI prefix)
+          }
+        ]
+      };
+      
+      console.log(`[MULTIMODAL EMBEDDER] Sending request to ${embedUrl}`);
+      console.log(`[MULTIMODAL EMBEDDER] Image base64 length: ${resizedBase64.length} chars`);
+      console.log(`[MULTIMODAL EMBEDDER] Prompt text: "${promptText.substring(0, 100)}..."`);
+      console.log(`[MULTIMODAL EMBEDDER] Using llamacpp format: { content: [{ prompt_string, multimodal_data }] }`);
+      
+      // Log actual payload structure (not stringified for display)
+      console.log(`[MULTIMODAL EMBEDDER] Actual payload.content[0]:`, {
+        prompt_string: payload.content[0].prompt_string.substring(0, 50) + '...',
+        multimodal_data_is_array: Array.isArray(payload.content[0].multimodal_data),
+        multimodal_data_length: payload.content[0].multimodal_data.length,
+        multimodal_data_first_item_type: typeof payload.content[0].multimodal_data[0],
+        multimodal_data_first_item_preview: payload.content[0].multimodal_data[0].substring(0, 60) + '...'
+      });
+      
+      const requestBody = JSON.stringify(payload);
+      console.log(`[MULTIMODAL EMBEDDER] Total request body size: ${requestBody.length} bytes`);
+      
+      const response = await fetch(embedUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: requestBody,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[MULTIMODAL EMBEDDER] HTTP error: ${response.status} - ${errorText}`);
+        throw new Error(`Multimodal embedder API error: ${response.status} - ${errorText}`);
+      }
+
+      const responseData = await response.json();
+      console.log(`[MULTIMODAL EMBEDDER] Response received, parsing...`);
+      
+      // Extract embedding from llamacpp-python format: [{ "embedding": [[...]] }]
+      const embedding = responseData?.[0]?.embedding?.[0];
+      
+      if (!embedding || !Array.isArray(embedding) || embedding.length === 0) {
+        console.error("[MULTIMODAL EMBEDDER] Failed to extract embedding. Response structure:", {
+          isArray: Array.isArray(responseData),
+          hasFirstElement: !!responseData?.[0],
+          firstElementKeys: responseData?.[0] ? Object.keys(responseData[0]) : null,
+        });
+        throw new Error("Multimodal embedder returned invalid embedding structure!");
+      }
+      
+      console.log(`[MULTIMODAL EMBEDDER] ✓ Successfully received embedding with ${embedding.length} dimensions`);
+      
+      // ALWAYS normalize the embedding to ensure consistency
+      const embeddingMagnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+      console.log(`[MULTIMODAL EMBEDDER] Raw embedding magnitude: ${embeddingMagnitude.toFixed(6)}`);
+      
+      if (embeddingMagnitude === 0) {
+        console.error("[MULTIMODAL EMBEDDER] Zero magnitude embedding detected!");
+        throw new Error("Received zero-magnitude embedding vector from multimodal embedder");
+      }
+      
+      const normalizedEmbedding = embedding.map(val => val / embeddingMagnitude);
+      const normalizedMagnitude = Math.sqrt(normalizedEmbedding.reduce((sum, val) => sum + val * val, 0));
+      console.log(`[MULTIMODAL EMBEDDER] Normalized magnitude: ${normalizedMagnitude.toFixed(6)} (should be ~1.0)`);
+      console.log(`[MULTIMODAL EMBEDDER] First 5 values:`, normalizedEmbedding.slice(0, 5));
+      
+      return normalizedEmbedding;
+    } catch (error) {
+      console.error('[MULTIMODAL EMBEDDER] Error embedding image:', error);
+      throw new Error(`Failed to embed image with multimodal embedder: ${error.message}`);
+    }
+  }
+
+  /**
+   * Embeds text using the multimodal embedder endpoint (without image).
+   * Used for text queries when multimodal embedder is configured.
+   * @param {string} text - The text to embed.
+   * @param {string} basePath - The base path of the multimodal embedder.
+   * @param {string} model - The model name to use for embedding.
+   * @returns {Promise<number[]>} - A promise that resolves to the text embedding vector.
+   */
+  async embedTextWithMultimodal(text, basePath, model) {
+    try {
+      console.log(`[MULTIMODAL EMBEDDER TEXT] === NEW QUERY REQUEST ===`);
+      console.log(`[MULTIMODAL EMBEDDER TEXT] Raw input text: "${text}"`);
+      console.log(`[MULTIMODAL EMBEDDER TEXT] Text length: ${text.length}`);
+      console.log(`[MULTIMODAL EMBEDDER TEXT] Text type: ${typeof text}`);
+      console.log(`[MULTIMODAL EMBEDDER TEXT] Base Path: ${basePath}`);
+      console.log(`[MULTIMODAL EMBEDDER TEXT] Model: ${model}`);
+      
+      const embedUrl = `${basePath}/embedding`;
+      
+      // CRITICAL: Don't use instruction prefixes with multimodal embedders
+      // They can cause severe cache pollution in llama.cpp server
+      // Just use the raw query text for better semantic matching
+      const searchQuery = text;
+      
+      console.log(`[MULTIMODAL EMBEDDER TEXT] Query for embedding: "${searchQuery}"`);
+      console.log(`[MULTIMODAL EMBEDDER TEXT] Query hash: ${searchQuery.split('').reduce((a,b)=>{a=((a<<5)-a)+b.charCodeAt(0);return a&a},0)}`);
+      
+      // For text-only embedding, use same format but without multimodal_data
+      const payload = {
+        content: [  // API requires 'content' field
+          {
+            prompt_string: searchQuery  // Raw query text
+          }
+        ],
+        cache_prompt: false  // Disable prompt caching to ensure fresh embeddings
+      };
+      
+      console.log(`[MULTIMODAL EMBEDDER TEXT] Sending request to ${embedUrl}`);
+      
+      const response = await fetch(embedUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[MULTIMODAL EMBEDDER TEXT] HTTP error: ${response.status} - ${errorText}`);
+        throw new Error(`Multimodal embedder text API error: ${response.status} - ${errorText}`);
+      }
+
+      const responseData = await response.json();
+      console.log(`[MULTIMODAL EMBEDDER TEXT] Response received, parsing...`);
+      
+      // Extract embedding from llamacpp-python format
+      const embedding = responseData?.[0]?.embedding?.[0];
+      
+      if (!embedding || !Array.isArray(embedding) || embedding.length === 0) {
+        console.error("[MULTIMODAL EMBEDDER TEXT] Failed to extract embedding. Response structure:", {
+          isArray: Array.isArray(responseData),
+          hasFirstElement: !!responseData?.[0],
+          firstElementKeys: responseData?.[0] ? Object.keys(responseData[0]) : null,
+        });
+        throw new Error("Multimodal embedder returned invalid embedding structure!");
+      }
+      
+      console.log(`[MULTIMODAL EMBEDDER TEXT] ✓ Successfully received embedding with ${embedding.length} dimensions`);
+      
+      // Normalize the embedding
+      const embeddingMagnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+      console.log(`[MULTIMODAL EMBEDDER TEXT] Raw embedding magnitude: ${embeddingMagnitude.toFixed(6)}`);
+      
+      if (embeddingMagnitude === 0) {
+        console.error("[MULTIMODAL EMBEDDER TEXT] Zero magnitude embedding detected!");
+        throw new Error("Received zero-magnitude embedding vector from multimodal embedder");
+      }
+      
+      const normalizedEmbedding = embedding.map(val => val / embeddingMagnitude);
+      const normalizedMagnitude = Math.sqrt(normalizedEmbedding.reduce((sum, val) => sum + val * val, 0));
+      console.log(`[MULTIMODAL EMBEDDER TEXT] Normalized magnitude: ${normalizedMagnitude.toFixed(6)} (should be ~1.0)`);
+      console.log(`[MULTIMODAL EMBEDDER TEXT] First 5 values:`, normalizedEmbedding.slice(0, 5));
+      
+      return normalizedEmbedding;
+    } catch (error) {
+      console.error('[MULTIMODAL EMBEDDER TEXT] Error embedding text:', error);
+      throw new Error(`Failed to embed text with multimodal embedder: ${error.message}`);
+    }
+  }
+
   // Other methods would follow similar patterns of adaptation
 }
 

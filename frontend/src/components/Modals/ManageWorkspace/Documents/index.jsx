@@ -93,7 +93,7 @@ export default function DocumentSettings({ workspace, systemSettings }) {
     fetchKeys(true);
   }, []);
 
-  const updateWorkspace = async (e) => {
+  const updateWorkspace = async (e, forceReEmbed = false) => {
     e.preventDefault();
     setLoading(true);
     showToast("Updating workspace...", "info", { autoClose: false });
@@ -101,6 +101,7 @@ export default function DocumentSettings({ workspace, systemSettings }) {
 
     const changesToSend = {
       adds: movedItems.map((item) => `${item.folderName}/${item.name}`),
+      forceReEmbed: forceReEmbed,
     };
 
     setSelectedItems({});

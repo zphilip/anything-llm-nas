@@ -16,6 +16,7 @@ function FileUploadProgressComponent({
   onUploadError,
   setLoading,
   setLoadingMessage,
+  useOCR = false,
 }) {
   const [timerMs, setTimerMs] = useState(10);
   const [status, setStatus] = useState("pending");
@@ -41,6 +42,7 @@ function FileUploadProgressComponent({
       const start = Number(new Date());
       const formData = new FormData();
       formData.append("file", file, file.name);
+      formData.append("options", JSON.stringify({ useOCR }));
       const timer = setInterval(() => {
         setTimerMs(Number(new Date()) - start);
       }, 100);

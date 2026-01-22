@@ -13,6 +13,8 @@ yarn.lock
 processFiles/
 mountpoint/
 cache/
+server/core
+server/server.log
 # SMB/NAS mount points
 mountpoint/*
 !mountpoint/README.md

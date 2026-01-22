@@ -429,8 +429,9 @@ async function fileToPickerData({
     const rawData = fs.readFileSync(pathToFile, "utf8");
     try {
       metadata = JSON.parse(rawData);
-      // Remove the pageContent field from the metadata - it is large and not needed for the picker
+      // Remove large fields - not needed for the picker
       delete metadata.pageContent;
+      delete metadata.imageBase64;
     } catch (err) {
       console.error("Error parsing file", err);
       return null;
@@ -462,8 +463,9 @@ async function fileToPickerData({
         })
         .on("end", () => {
           metadata = JSON.parse(fileContent);
-          // Remove the pageContent field from the metadata - it is large and not needed for the picker
+          // Remove large fields - not needed for the picker
           delete metadata.pageContent;
+          delete metadata.imageBase64;
           resolve(metadata);
         })
         .on("error", (err) => {
@@ -506,12 +508,12 @@ const REQUIRED_FILE_OBJECT_FIELDS = [
   "chunkSource",
   "published",
   "wordCount",
-  "token_count_estimate",
+  // token_count_estimate removed for backward compatibility with existing files
 ];
 
 /**
  * Checks if a given metadata object has all the required fields
- * @param {{name: string, type: string, url: string, title: string, docAuthor: string, description: string, docSource: string, chunkSource: string, published: string, wordCount: number, token_count_estimate: number}} metadata - The metadata object to check (fileToPickerData)
+ * @param {{name: string, type: string, url: string, title: string, docAuthor: string, description: string, docSource: string, chunkSource: string, published: string, wordCount: number}} metadata - The metadata object to check (fileToPickerData)
  * @returns {boolean} - Returns true if the metadata object has all the required fields, false otherwise
  */
 function hasRequiredMetadata(metadata = {}) {

@@ -80,7 +80,7 @@ const Document = {
     }
   },
 
-  addDocuments: async function (workspace, additions = [], userId = null) {
+  addDocuments: async function (workspace, additions = [], userId = null, forceReEmbed = false) {
     const VectorDb = getVectorDbClass();
     if (additions.length === 0) return { failed: [], embedded: [] };
     const { fileData } = require("../utils/files");
@@ -88,12 +88,16 @@ const Document = {
     const failedToEmbed = [];
     const errors = new Set();
 
+    if (forceReEmbed) {
+      console.log('🔄 Force re-embedding enabled - skipping vector cache for all documents');
+    }
+
     for (const path of additions) {
       const data = await fileData(path);
       if (!data) continue;
 
       const docId = uuidv4();
-      const { pageContent, ...metadata } = data;
+      const { pageContent, imageBase64, ...metadata } = data;
       const newDoc = {
         docId,
         filename: path.split("/")[1],
@@ -105,7 +109,8 @@ const Document = {
       const { vectorized, error } = await VectorDb.addDocumentToNamespace(
         workspace.slug,
         { ...data, docId },
-        path
+        path,
+        forceReEmbed  // Pass forceReEmbed as skipCache parameter
       );
 
       if (!vectorized) {

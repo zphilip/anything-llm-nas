@@ -76,15 +76,16 @@ class CollectorApi {
    * - Will append the options and optional metadata to the request body
    * @param {string} filename - The filename of the document to process
    * @param {Object} metadata - Optional metadata key:value pairs
+   * @param {Object} customOptions - Optional custom options to merge with default options
    * @returns {Promise<Object>} - The response from the collector API
    */
-  async processDocument(filename = "", metadata = {}) {
+  async processDocument(filename = "", metadata = {}, customOptions = {}) {
     if (!filename) return false;
 
     const data = JSON.stringify({
       filename,
       metadata,
-      options: this.#attachOptions(),
+      options: { ...this.#attachOptions(), ...customOptions },
     });
 
     return await fetch(`${this.endpoint}/process`, {

@@ -28,6 +28,7 @@ function WorkspaceDirectory({
 }) {
   const { t } = useTranslation();
   const [selectedItems, setSelectedItems] = useState({});
+  const [forceReEmbed, setForceReEmbed] = useState(false);
 
   const toggleSelection = (item) => {
     setSelectedItems((prevSelectedItems) => {
@@ -72,7 +73,7 @@ function WorkspaceDirectory({
         adds: [],
         deletes: itemsToRemove,
       });
-      await fetchKeys(true);
+      await fetchKeys(true, true); // Force full resync after deletion
       setSelectedItems({});
     } catch (error) {
       console.error("Failed to remove documents:", error);
@@ -84,7 +85,8 @@ function WorkspaceDirectory({
 
   const handleSaveChanges = (e) => {
     setSelectedItems({});
-    saveChanges(e);
+    saveChanges(e, forceReEmbed);
+    setForceReEmbed(false);
   };
 
   if (loading) {
@@ -226,25 +228,42 @@ function WorkspaceDirectory({
           <div className="flex items-center justify-between py-6">
             <div className="text-white/80">
               <p className="text-sm font-semibold">
-                {embeddingCosts === 0
+                {embeddingCosts === 0 && !forceReEmbed
                   ? ""
+                  : forceReEmbed
+                  ? "Re-embedding enabled: All documents will be processed again"
                   : `Estimated Cost: ${
                       embeddingCosts < 0.01
                         ? `< $0.01`
                         : dollarFormat(embeddingCosts)
                     }`}
               </p>
-              <p className="mt-2 text-xs italic" hidden={embeddingCosts === 0}>
-                {t("connectors.directory.costs")}
+              <p className="mt-2 text-xs italic" hidden={embeddingCosts === 0 && !forceReEmbed}>
+                {forceReEmbed
+                  ? "Cached vectors will be ignored and documents will be re-embedded from scratch."
+                  : t("connectors.directory.costs")}
               </p>
             </div>
 
-            <button
-              onClick={(e) => handleSaveChanges(e)}
-              className="border border-slate-200 px-5 py-2.5 rounded-lg text-white text-sm items-center flex gap-x-2 hover:bg-slate-200 hover:text-slate-800 focus:ring-gray-800"
-            >
-              {t("connectors.directory.save_embed")}
-            </button>
+            <div className="flex items-center gap-x-3">
+              <label className="flex items-center gap-x-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={forceReEmbed}
+                  onChange={(e) => setForceReEmbed(e.target.checked)}
+                  className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                />
+                <span className="text-white text-sm font-medium">
+                  Re-embedding
+                </span>
+              </label>
+              <button
+                onClick={(e) => handleSaveChanges(e)}
+                className="border border-slate-200 px-5 py-2.5 rounded-lg text-white text-sm items-center flex gap-x-2 hover:bg-slate-200 hover:text-slate-800 focus:ring-gray-800"
+              >
+                {t("connectors.directory.save_embed")}
+              </button>
+            </div>
           </div>
         )}
       </div>

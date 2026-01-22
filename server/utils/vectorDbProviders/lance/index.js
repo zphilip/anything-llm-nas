@@ -47,9 +47,10 @@ const LanceDb = {
   },
   distanceToSimilarity: function (distance = null) {
     if (distance === null || typeof distance !== "number") return 0.0;
-    if (distance >= 1.0) return 1;
-    if (distance < 0) return 1 - Math.abs(distance);
-    return 1 - distance;
+    // For cosine distance: similarity = 1 - distance
+    // Cosine distance ranges from 0 (identical) to 2 (opposite)
+    // Cosine similarity ranges from 1 (identical) to -1 (opposite)
+    return Math.max(-1, Math.min(1, 1 - distance));
   },
   heartbeat: async function () {
     await this.connect();
@@ -199,6 +200,48 @@ const LanceDb = {
       if (index < 5) {
         console.log(`  [Result ${index}] Distance: ${item._distance}, Similarity: ${similarity}`);
       }
+      
+      // DIAGNOSTIC: Analyze distance patterns
+      if (index === 0) {
+        console.log(`[VECTOR DIAGNOSTIC] First result analysis...`);
+        console.log(`  - Query vector dimension: ${queryVector.length}`);
+        console.log(`  - Cosine distance: ${item._distance.toFixed(6)}`);
+        console.log(`  - Cosine similarity: ${(1 - item._distance).toFixed(6)}`);
+        console.log(`  - Query vector stats:`);
+        
+        const qMagnitude = Math.sqrt(queryVector.reduce((sum, v) => sum + v * v, 0));
+        const qMean = queryVector.reduce((sum, v) => sum + v, 0) / queryVector.length;
+        const qStd = Math.sqrt(queryVector.reduce((sum, v) => sum + Math.pow(v - qMean, 2), 0) / queryVector.length);
+        
+        console.log(`    - Magnitude: ${qMagnitude.toFixed(6)} (should be ~1.0 if normalized)`);
+        console.log(`    - Mean: ${qMean.toFixed(6)}`);
+        console.log(`    - Std Dev: ${qStd.toFixed(6)}`);
+        console.log(`    - Min: ${Math.min(...queryVector).toFixed(6)}`);
+        console.log(`    - Max: ${Math.max(...queryVector).toFixed(6)}`);
+        console.log(`    - First 10 values:`, queryVector.slice(0, 10));
+        
+        // Analyze what the distance tells us
+        const cosineSim = 1 - item._distance;
+        if (cosineSim > 0.9) {
+          console.log(`  ✓ EXCELLENT: Very high similarity (${(cosineSim * 100).toFixed(1)}%) - semantically very close`);
+        } else if (cosineSim > 0.7) {
+          console.log(`  ✓ GOOD: High similarity (${(cosineSim * 100).toFixed(1)}%) - semantically related`);
+        } else if (cosineSim > 0.5) {
+          console.log(`  ~ MODERATE: Medium similarity (${(cosineSim * 100).toFixed(1)}%) - somewhat related`);
+        } else if (cosineSim > 0.2) {
+          console.log(`  ⚠️  LOW: Low similarity (${(cosineSim * 100).toFixed(1)}%) - weakly related`);
+        } else if (cosineSim > -0.2) {
+          console.log(`  ❌ VERY LOW: Nearly orthogonal (${(cosineSim * 100).toFixed(1)}%) - different semantic spaces`);
+          console.log(`  This indicates query and stored embeddings are in DIFFERENT subspaces`);
+          console.log(`  Possible causes:`);
+          console.log(`    1. Cross-modal mismatch (text query vs image+text embeddings)`);
+          console.log(`    2. Different embedding models used`);
+          console.log(`    3. Query not being embedded correctly`);
+        } else {
+          console.log(`  ❌ NEGATIVE: Opposite direction (${(cosineSim * 100).toFixed(1)}%) - semantically opposite`);
+        }
+      }
+      
       if (similarity < similarityThreshold)
         return;
       const { vector: _, ...rest } = item;
@@ -246,11 +289,50 @@ const LanceDb = {
       scores: [],
     };
 
+    // DIAGNOSTIC: Check query vector statistics
+    const queryMagnitude = Math.sqrt(queryVector.reduce((sum, val) => sum + val * val, 0));
+    const queryMean = queryVector.reduce((sum, val) => sum + val, 0) / queryVector.length;
+    const queryStd = Math.sqrt(queryVector.reduce((sum, val) => sum + Math.pow(val - queryMean, 2), 0) / queryVector.length);
+    console.log("[DIAGNOSTIC] Query Vector Stats:");
+    console.log(`  - Magnitude: ${queryMagnitude.toFixed(6)}`);
+    console.log(`  - Mean: ${queryMean.toFixed(6)}`);
+    console.log(`  - Std Dev: ${queryStd.toFixed(6)}`);
+    console.log(`  - Min: ${Math.min(...queryVector).toFixed(6)}`);
+    console.log(`  - Max: ${Math.max(...queryVector).toFixed(6)}`);
+    console.log(`  - First 10 values:`, queryVector.slice(0, 10));
+
     const response = await collection
       .vectorSearch(queryVector)
       .distanceType("l2")
       .limit(topN * 2)
       .toArray();
+
+    // DIAGNOSTIC: Check first stored vector if available
+    if (response.length > 0) {
+      console.log("[DIAGNOSTIC] First Result Keys:", Object.keys(response[0]));
+      console.log("[DIAGNOSTIC] First Result (partial):", JSON.stringify(response[0], null, 2).substring(0, 500));
+      
+      if (response[0].vector && Array.isArray(response[0].vector)) {
+        const storedVector = response[0].vector;
+        const storedMagnitude = Math.sqrt(storedVector.reduce((sum, val) => sum + val * val, 0));
+        const storedMean = storedVector.reduce((sum, val) => sum + val, 0) / storedVector.length;
+        const storedStd = Math.sqrt(storedVector.reduce((sum, val) => sum + Math.pow(val - storedMean, 2), 0) / storedVector.length);
+        console.log("[DIAGNOSTIC] First Stored Vector Stats:");
+        console.log(`  - Magnitude: ${storedMagnitude.toFixed(6)}`);
+        console.log(`  - Mean: ${storedMean.toFixed(6)}`);
+        console.log(`  - Std Dev: ${storedStd.toFixed(6)}`);
+        console.log(`  - Min: ${Math.min(...storedVector).toFixed(6)}`);
+        console.log(`  - Max: ${Math.max(...storedVector).toFixed(6)}`);
+        console.log(`  - First 10 values:`, storedVector.slice(0, 10));
+        
+        // Calculate dot product to check if they're similar
+        const dotProduct = queryVector.reduce((sum, val, i) => sum + val * storedVector[i], 0);
+        console.log(`  - Dot Product with Query: ${dotProduct.toFixed(6)}`);
+        console.log(`  - Cosine Similarity: ${(dotProduct / (queryMagnitude * storedMagnitude)).toFixed(6)}`);
+      } else {
+        console.log("[DIAGNOSTIC] Vector field not available in response (LanceDB doesn't return vectors by default)");
+      }
+    }
 
     if (response.some(item => isNaN(item._distance))) {
       console.warn("LanceDB returned NaN distances. Ensure your vectors are normalized.");
@@ -311,6 +393,26 @@ const LanceDb = {
       ...collection,
     };
   },
+  
+  /**
+   * Embeds text using the multimodal embedder (for queries when multimodal embedder is configured)
+   * @param {string} text - The text to embed
+   * @param {string} basePath - The multimodal embedder base path
+   * @param {string} model - The multimodal embedder model
+   * @returns {Promise<number[]>} - The embedding vector
+   */
+  embedTextWithMultimodalEmbedder: async function (text, basePath, model) {
+    const EmbedderEngine = getEmbeddingEngineSelection();
+    
+    // Check if the embedder has the multimodal text embedding method
+    if (typeof EmbedderEngine.embedTextWithMultimodal === 'function') {
+      return await EmbedderEngine.embedTextWithMultimodal(text, basePath, model);
+    }
+    
+    // Fallback: if the method doesn't exist, throw error
+    throw new Error("Multimodal embedder does not support text-only embedding");
+  },
+  
   /**
    *
    * @param {LanceClient} client
@@ -319,11 +421,47 @@ const LanceDb = {
    * @returns
    */
   updateOrCreateCollection: async function (client, data = [], namespace) {
+    // Debug: Check for empty strings in the data being submitted to LanceDB
+    console.log(`[LanceDB] Inserting ${data.length} records into collection "${namespace}"`);
+    for (let i = 0; i < Math.min(data.length, 2); i++) {
+      console.log(`[LanceDB DEBUG] Record ${i} fields:`, Object.keys(data[i]));
+      for (const [key, value] of Object.entries(data[i])) {
+        if (key === 'vector') continue; // Skip vector array
+        if (value === "") {
+          console.error(`  ❌ EMPTY STRING in LanceDB submission: ${key} = ""`);
+        } else if (typeof value === 'string') {
+          console.log(`  ✓ ${key} = "${value.substring(0, 30)}${value.length > 30 ? '...' : ''}"`);
+        } else {
+          console.log(`  ✓ ${key} = ${typeof value}`);
+        }
+      }
+    }
+    
     const hasNamespace = await this.hasNamespace(namespace);
     if (hasNamespace) {
-      const collection = await client.openTable(namespace);
-      await collection.add(data);
-      return true;
+      try {
+        const collection = await client.openTable(namespace);
+        await collection.add(data);
+        return true;
+      } catch (error) {
+        // If we get an Arrow schema error about empty strings, the table has corrupted data
+        if (error.message.includes('Need at least 4 bytes in buffers[0]') || 
+            error.message.includes('Invalid argument error')) {
+          console.error(`[LanceDB] Schema conflict detected in collection "${namespace}"`);
+          console.error(`[LanceDB] This is caused by old records with empty string fields.`);
+          console.error(`[LanceDB] Dropping and recreating collection...`);
+          
+          // Drop the corrupted table
+          await client.dropTable(namespace);
+          
+          // Create fresh table with new data
+          await client.createTable(namespace, data);
+          console.log(`[LanceDB] ✓ Collection "${namespace}" recreated successfully`);
+          return true;
+        }
+        // Re-throw other errors
+        throw error;
+      }
     }
 
     await client.createTable(namespace, data);
@@ -388,6 +526,22 @@ const LanceDb = {
       if (!pageContent || pageContent.length == 0) return false;
 
       console.log("Adding new vectorized document into namespace", namespace);
+      console.log("[DEBUG] documentData keys:", Object.keys(documentData));
+      console.log("[DEBUG] Checking documentData for empty strings:");
+      for (const [key, value] of Object.entries(documentData)) {
+        // Skip logging large base64 fields
+        if (key === 'pageContent' || key === 'imageBase64') {
+          console.log(`  ✓ ${key} = <base64 data - ${typeof value === 'string' ? value.length : 0} bytes>`);
+          continue;
+        }
+        if (value === "") {
+          console.error(`  ❌ EMPTY STRING IN documentData: ${key} = ""`);
+        } else if (typeof value === 'string') {
+          console.log(`  ✓ ${key} = "${value.substring(0, 50)}${value.length > 50 ? '...' : ''}"`);
+        } else {
+          console.log(`  ✓ ${key} = ${typeof value} (${JSON.stringify(value).substring(0, 50)}...)`);
+        }
+      }
       if (!skipCache) {
         const cacheResult = await cachedVectorInformation(fullFilePath);
         if (cacheResult.exists) {
@@ -421,6 +575,10 @@ const LanceDb = {
       // Check fileType from metadata (set by collector) instead of checking file extension
       const fileType = metadata.fileType || (isImage(fullFilePath) ? "image" : "text");
       console.log("Processing document with fileType:", fileType, "from:", fullFilePath);
+      
+      // Filter base64 from metadata before logging
+      const { imageBase64: _img, pageContent: _page, ...metadataForLog } = metadata;
+      console.log("[DEBUG] Raw metadata received:", JSON.stringify(metadataForLog, null, 2));
 
       const textSplitter = new TextSplitter({
         chunkSize: TextSplitter.determineMaxChunkSize(
@@ -437,21 +595,172 @@ const LanceDb = {
         chunkPrefix: EmbedderEngine?.embeddingPrefix,
       });
 
-      // Handle images differently - use LLM to describe, then embed the description
+      // Handle images differently - check for multimodal embedder first
       if (fileType === "image") {
-        console.log("Processing image file with LLM description...");
+        console.log("===============================================");
+        console.log("[IMAGE PROCESSING] Starting image embedding...");
+        console.log("===============================================");
+        
+        // Load multimodal embedder settings
+        const { SystemSettings: SS } = require("../../../models/systemSettings");
+        const embedderSettings = await SS.multimodalEmbedderPreferenceKeys();
+        console.log("[MULTIMODAL EMBEDDER] Settings from database:", JSON.stringify(embedderSettings, null, 2));
+        
+        const hasMultimodalEmbedderConfigured = embedderSettings.MultimodalEmbedderProvider && 
+                                      embedderSettings.MultimodalEmbedderProvider !== 'none' && 
+                                      embedderSettings.MultimodalEmbedderBasePath &&
+                                      embedderSettings.MultimodalEmbedderBasePath.trim() !== '';
+        
+        // Use a mutable variable for fallback logic
+        let useMultimodalEmbedder = hasMultimodalEmbedderConfigured;
+        
+        console.log("[EMBEDDING MODE CHECK] Multimodal Embedder available:", hasMultimodalEmbedderConfigured);
+        console.log("  - Provider:", embedderSettings.MultimodalEmbedderProvider || "NOT SET");
+        console.log("  - Base Path:", embedderSettings.MultimodalEmbedderBasePath || "NOT SET");
+        console.log("  - Model:", embedderSettings.MultimodalEmbedderModelPref || "NOT SET");
+        
+        if (useMultimodalEmbedder) {
+          console.log("[EMBEDDING MODE] ✓ Using Strategy 1: Multimodal Embedder (direct image embedding with Vision LLM description)");
+        } else {
+          console.log("[EMBEDDING MODE] ✓ Using Strategy 2: Vision LLM (description + text embedding)");
+        }
+        console.log("===============================================");
+        
         const documentVectors = [];
         const imageVectors = []; // Add imageVectors array like mything-llm
         const submissions = [];
         
-        // Check if the LLM provider supports image description
-        if (typeof imageDescribeEngine.describeImages !== 'function') {
-          console.error(`addDocumentToNamespace: LLM provider does not support image description. Please use 'ollama' or 'llamacpp' for image vectorization.`);
-          return { 
-            vectorized: false, 
-            error: `LLM provider does not support image description. Please configure LLM_PROVIDER to 'ollama' or 'llamacpp' in your .env file.`
-          };
+        // STRATEGY 1: Direct image embedding using multimodal embedder WITH Vision LLM description
+        if (useMultimodalEmbedder) {
+          try {
+            console.log("[STRATEGY 1] Step 1: Getting image description from Vision LLM...");
+            
+            // Check if the LLM provider supports image description
+            if (typeof imageDescribeEngine.describeImages !== 'function') {
+              console.error(`[STRATEGY 1] LLM provider does not support image description.`);
+              throw new Error("Vision LLM not available for Strategy 1");
+            }
+            
+            // Get semantic description from Vision LLM first
+            const fileDescription = metadata.title || metadata.description || fullFilePath.split('/').pop() || "Image file";
+            console.log("[STRATEGY 1] Getting description for:", fileDescription);
+            
+            const imageDescriptions = await imageDescribeEngine.describeImages([pageContent], [fileDescription]);
+            console.log("[STRATEGY 1] Vision LLM response:", JSON.stringify(imageDescriptions, null, 2).substring(0, 300));
+            
+            const desc = imageDescriptions[0].description; // desc is array: [filename, AI_description]
+            const aiDescription = Array.isArray(desc) ? desc[1] : desc; // Get the AI description part
+            
+            console.log("[STRATEGY 1] Using AI description:", aiDescription.substring(0, 200) + "...");
+            console.log("[STRATEGY 1] Step 2: Embedding image with multimodal embedder...");
+            
+            // Get the multimodal embedder instance
+            const { embedImageDirect } = EmbedderEngine;
+            
+            if (typeof embedImageDirect === 'function') {
+              // Call the multimodal embedder with rich semantic description
+              const imageEmbedding = await EmbedderEngine.embedImageDirect(
+                pageContent, // base64 image
+                embedderSettings.MultimodalEmbedderBasePath,
+                embedderSettings.MultimodalEmbedderModelPref,
+                aiDescription // Rich AI-generated description
+              );
+              
+              console.log(`[STRATEGY 1] ✓ Received image embedding with ${imageEmbedding.length} dimensions`);
+              
+              // DIAGNOSTIC: Check if embeddings are unique
+              const embMagnitude = Math.sqrt(imageEmbedding.reduce((sum, val) => sum + val * val, 0));
+              const embMean = imageEmbedding.reduce((sum, val) => sum + val, 0) / imageEmbedding.length;
+              const embStd = Math.sqrt(imageEmbedding.reduce((sum, val) => sum + Math.pow(val - embMean, 2), 0) / imageEmbedding.length);
+              console.log(`[STRATEGY 1 DIAGNOSTIC] Embedding Stats:`);
+              console.log(`  - Magnitude: ${embMagnitude.toFixed(6)}`);
+              console.log(`  - Mean: ${embMean.toFixed(6)}`);
+              console.log(`  - Std Dev: ${embStd.toFixed(6)}`);
+              console.log(`  - Min: ${Math.min(...imageEmbedding).toFixed(6)}`);
+              console.log(`  - Max: ${Math.max(...imageEmbedding).toFixed(6)}`);
+              console.log(`  - First 10 values:`, imageEmbedding.slice(0, 10));
+              console.log(`  - Last 10 values:`, imageEmbedding.slice(-10));
+              console.log(`  - Sum of all values: ${imageEmbedding.reduce((sum, val) => sum + val, 0).toFixed(6)}`);
+              
+              // Create vector record with image embedding AND AI description
+              const id = uuidv4();
+              
+              // Filter out empty strings from metadata to prevent Arrow schema errors
+              const cleanMetadata = {};
+              for (const [key, value] of Object.entries(metadata)) {
+                // Always filter out empty strings, especially chunkSource
+                if (value !== "" && value !== null && value !== undefined) {
+                  cleanMetadata[key] = value;
+                } else if (value === "" && key === "chunkSource") {
+                  // Fix old files with empty chunkSource
+                  cleanMetadata[key] = "image-upload";
+                }
+              }
+              
+              const vectorRecord = {
+                id: id,
+                values: imageEmbedding,
+                metadata: { 
+                  ...cleanMetadata, 
+                  text: aiDescription || "Image content", // Ensure text is never empty
+                  embeddingMode: "multimodal_direct"
+                },
+              };
+              
+              imageVectors.push(vectorRecord);
+              submissions.push({
+                ...vectorRecord.metadata,
+                id: vectorRecord.id,
+                vector: vectorRecord.values,
+              });
+              documentVectors.push({ docId, vectorId: vectorRecord.id });
+              
+              // Filter out base64 fields before logging
+              const { imageBase64: _img, pageContent: _page, ...metadataForLog } = vectorRecord.metadata;
+              console.log("[STRATEGY 1 DEBUG] Submission data:", JSON.stringify({
+                id: vectorRecord.id,
+                metadataKeys: Object.keys(vectorRecord.metadata),
+                metadata: metadataForLog,
+              }, null, 2));
+              console.log("[STRATEGY 1 DEBUG] Checking for empty strings in metadata:");
+              for (const [key, value] of Object.entries(vectorRecord.metadata)) {
+                // Skip logging large base64 fields
+                if (key === 'imageBase64' || key === 'pageContent') {
+                  console.log(`  ✓ ${key} = <base64 data - ${typeof value === 'string' ? value.length : 0} bytes>`);
+                  continue;
+                }
+                if (value === "") {
+                  console.error(`  ❌ FOUND EMPTY STRING: ${key} = ""`);  
+                } else {
+                  console.log(`  ✓ ${key} = ${typeof value === 'string' ? '"' + value.substring(0, 50) + '..."' : value}`);
+                }
+              }
+              
+              console.log("[STRATEGY 1] ✓ Successfully created vector record for image");
+            } else {
+              console.warn("[STRATEGY 1] embedImageDirect method not available on EmbedderEngine, falling back to Strategy 2");
+              throw new Error("embedImageDirect not available");
+            }
+          } catch (error) {
+            console.error("[STRATEGY 1] Failed to embed image with multimodal embedder:", error.message);
+            console.log("[STRATEGY 1] Falling back to Strategy 2 (Vision LLM)...");
+            // Don't throw - fall through to Strategy 2
+            useMultimodalEmbedder = false; // Set to false to trigger Strategy 2 below
+          }
         }
+        
+        // STRATEGY 2: Vision LLM description + text embedding (only if Strategy 1 failed or not available)
+        if (!useMultimodalEmbedder) {
+          console.log("[STRATEGY 2] Using Vision LLM for image description + text embedding...");
+          
+          // Check if the LLM provider supports image description
+          if (typeof imageDescribeEngine.describeImages !== 'function') {
+            console.error(`addDocumentToNamespace: LLM provider does not support image description. Please use 'ollama' or 'llamacpp' for image vectorization.`);
+            return { 
+              vectorized: false, 
+              error: `LLM provider does not support image description. Please configure LLM_PROVIDER to 'ollama' or 'llamacpp' in your .env file.`
+            };
+          }
         
         // Get image description from LLM - use title (filename) as fallback if description is missing
         // metadata.description is often null, so use metadata.title (which contains the filename)
@@ -486,10 +795,21 @@ const LanceDb = {
             console.log(`[IMAGE EMBEDDING ${i}] First 5 values:`, textEmbedding.slice(0, 5));
             console.log(`[IMAGE EMBEDDING ${i}] Description: "${desc[i].substring(0, 100)}..."`);
             
+            // Filter out empty strings from metadata
+            const cleanMetadata = {};
+            for (const [key, value] of Object.entries(metadata)) {
+              if (value !== "" && value !== null && value !== undefined) {
+                cleanMetadata[key] = value;
+              } else if (value === "" && key === "chunkSource") {
+                // Fix old files with empty chunkSource
+                cleanMetadata[key] = "image-upload";
+              }
+            }
+            
             const vectorRecord = {
               id: id,
               values: textEmbedding,
-              metadata: { ...metadata, text: desc[i] },
+              metadata: { ...cleanMetadata, text: desc[i] || "Image content" },
             };
             
             imageVectors.push(vectorRecord);
@@ -506,6 +826,7 @@ const LanceDb = {
             "Could not embed image description! This document will not be recorded."
           );
         }
+        } // End of Strategy 2
         
         const { client } = await this.connect();
         
@@ -533,13 +854,24 @@ const LanceDb = {
 
       if (!!vectorValues && vectorValues.length > 0) {
         for (const [i, vector] of vectorValues.entries()) {
+          // Filter out empty strings from metadata
+          const cleanMetadata = {};
+          for (const [key, value] of Object.entries(metadata)) {
+            if (value !== "" && value !== null && value !== undefined) {
+              cleanMetadata[key] = value;
+            } else if (value === "" && key === "chunkSource") {
+              // Fix old files with empty chunkSource  
+              cleanMetadata[key] = "text-upload";
+            }
+          }
+          
           const vectorRecord = {
             id: uuidv4(),
             values: vector,
             // [DO NOT REMOVE]
             // LangChain will be unable to find your text if you embed manually and dont include the `text` key.
             // https://github.com/hwchase17/langchainjs/blob/2def486af734c0ca87285a48f1a04c057ab74bdf/langchain/src/vectorstores/pinecone.ts#L64
-            metadata: { ...metadata, text: textChunks[i] },
+            metadata: { ...cleanMetadata, text: textChunks[i] || "" },
           };
 
           vectors.push(vectorRecord);
@@ -594,7 +926,36 @@ const LanceDb = {
       };
     }
 
-    const queryVector = await LLMConnector.embedTextInput(input);
+    // Check if Multimodal Embedder is configured - if so, use it for queries too
+    const { SystemSettings: SS } = require("../../../models/systemSettings");
+    const embedderSettings = await SS.multimodalEmbedderPreferenceKeys();
+    const hasMultimodalEmbedder = embedderSettings.MultimodalEmbedderProvider && 
+                                  embedderSettings.MultimodalEmbedderProvider !== 'none' && 
+                                  embedderSettings.MultimodalEmbedderBasePath &&
+                                  embedderSettings.MultimodalEmbedderBasePath.trim() !== '';
+    
+    let queryVector;
+    if (hasMultimodalEmbedder) {
+      console.log("[SEARCH QUERY] Using Multimodal Embedder for text query (to match image embeddings)");
+      console.log(`[SEARCH QUERY DEBUG] Input text: "${input}"`);
+      console.log(`[SEARCH QUERY DEBUG] BasePath: ${embedderSettings.MultimodalEmbedderBasePath}`);
+      console.log(`[SEARCH QUERY DEBUG] Model: ${embedderSettings.MultimodalEmbedderModelPref}`);
+      try {
+        // Use multimodal embedder for text-only query (no image_data)
+        queryVector = await this.embedTextWithMultimodalEmbedder(
+          input,
+          embedderSettings.MultimodalEmbedderBasePath,
+          embedderSettings.MultimodalEmbedderModelPref
+        );
+      } catch (error) {
+        console.warn("[SEARCH QUERY] Multimodal embedder failed, falling back to standard text embedder:", error.message);
+        queryVector = await LLMConnector.embedTextInput(input);
+      }
+    } else {
+      console.log("[SEARCH QUERY] Using standard text embedder");
+      queryVector = await LLMConnector.embedTextInput(input);
+    }
+    
     console.log("[AnythingLLM DEBUG] performSimilaritySearch:");
     console.log("  - Namespace:", namespace);
     console.log("  - Search Input:", input);
@@ -652,7 +1013,33 @@ const LanceDb = {
       };
     }
 
-    const queryVector = await LLMConnector.embedTextInput(input);
+    // Check if Multimodal Embedder is configured - if so, use it for queries too
+    const { SystemSettings: SS } = require("../../../models/systemSettings");
+    const embedderSettings = await SS.multimodalEmbedderPreferenceKeys();
+    const hasMultimodalEmbedder = embedderSettings.MultimodalEmbedderProvider && 
+                                  embedderSettings.MultimodalEmbedderProvider !== 'none' && 
+                                  embedderSettings.MultimodalEmbedderBasePath &&
+                                  embedderSettings.MultimodalEmbedderBasePath.trim() !== '';
+    
+    let queryVector;
+    if (hasMultimodalEmbedder) {
+      console.log("[SEARCH QUERY] Using Multimodal Embedder for text query (to match image embeddings)");
+      try {
+        // Use multimodal embedder for text-only query (no image_data)
+        // This ensures query vectors match the dimension of stored image embeddings
+        queryVector = await this.embedTextWithMultimodalEmbedder(
+          input,
+          embedderSettings.MultimodalEmbedderBasePath,
+          embedderSettings.MultimodalEmbedderModelPref
+        );
+      } catch (error) {
+        console.warn("[SEARCH QUERY] Multimodal embedder failed, falling back to standard text embedder:", error.message);
+        queryVector = await LLMConnector.embedTextInput(input);
+      }
+    } else {
+      console.log("[SEARCH QUERY] Using standard text embedder");
+      queryVector = await LLMConnector.embedTextInput(input);
+    }
     
     // Calculate query vector magnitude
     const queryMagnitude = Math.sqrt(queryVector.reduce((sum, val) => sum + val * val, 0));
@@ -711,7 +1098,32 @@ const LanceDb = {
       };
     }
 
-    const queryVector = await LLMConnector.embedTextInput(input);
+    // Check if Multimodal Embedder is configured - if so, use it for queries too
+    const { SystemSettings: SS } = require("../../../models/systemSettings");
+    const embedderSettings = await SS.multimodalEmbedderPreferenceKeys();
+    const hasMultimodalEmbedder = embedderSettings.MultimodalEmbedderProvider && 
+                                  embedderSettings.MultimodalEmbedderProvider !== 'none' && 
+                                  embedderSettings.MultimodalEmbedderBasePath &&
+                                  embedderSettings.MultimodalEmbedderBasePath.trim() !== '';
+    
+    let queryVector;
+    if (hasMultimodalEmbedder) {
+      console.log("[SEARCH QUERY] Using Multimodal Embedder for text query (to match image embeddings)");
+      try {
+        queryVector = await this.embedTextWithMultimodalEmbedder(
+          input,
+          embedderSettings.MultimodalEmbedderBasePath,
+          embedderSettings.MultimodalEmbedderModelPref
+        );
+      } catch (error) {
+        console.warn("[SEARCH QUERY] Multimodal embedder failed, falling back to standard text embedder:", error.message);
+        queryVector = await LLMConnector.embedTextInput(input);
+      }
+    } else {
+      console.log("[SEARCH QUERY] Using standard text embedder");
+      queryVector = await LLMConnector.embedTextInput(input);
+    }
+    
     const { contextTexts, sourceDocuments } = await this.similarityResponse({
       client,
       namespace,

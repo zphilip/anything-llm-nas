@@ -96,12 +96,16 @@ function apiDocumentEndpoints(app) {
       try {
         const Collector = new CollectorApi();
         const { originalname } = request.file;
-        const { addToWorkspaces = "", metadata: _metadata = {} } =
+        const { addToWorkspaces = "", metadata: _metadata = {}, options: _options = {} } =
           reqBody(request);
         const metadata =
           typeof _metadata === "string"
             ? safeJsonParse(_metadata, {})
             : _metadata;
+        const options =
+          typeof _options === "string"
+            ? safeJsonParse(_options, {})
+            : _options;
         const processingOnline = await Collector.online();
 
         if (!processingOnline) {
@@ -117,7 +121,8 @@ function apiDocumentEndpoints(app) {
 
         const { success, reason, documents } = await Collector.processDocument(
           originalname,
-          metadata
+          metadata,
+          options
         );
 
         if (!success) {

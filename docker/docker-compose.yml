@@ -7,6 +7,7 @@ networks:
 services:
   redis:
     container_name: anything-redis
+    restart: unless-stopped
     image: redis:7-alpine
     ports:
       - "6379:6379"
@@ -18,6 +19,7 @@ services:
 
   anything-llm:
     container_name: anythingllm
+    restart: unless-stopped
     build:
       context: ../.
       dockerfile: ./docker/Dockerfile

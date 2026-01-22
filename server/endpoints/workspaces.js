@@ -152,7 +152,8 @@ function workspaceEndpoints(app) {
           {
             documentName: originalname,
           },
-          response.locals?.user?.id
+          response.locals?.user?.id,
+          true // Enable batching for bulk uploads
         );
         response.status(200).json({ success: true, error: null });
       } catch (e) {
@@ -212,7 +213,7 @@ function workspaceEndpoints(app) {
       try {
         const user = await userFromSession(request, response);
         const { slug = null } = request.params;
-        const { adds = [], deletes = [] } = reqBody(request);
+        const { adds = [], deletes = [], forceReEmbed = false } = reqBody(request);
         const currWorkspace = multiUserMode(response)
           ? await Workspace.getWithUser(user, { slug })
           : await Workspace.get({ slug });
@@ -230,7 +231,8 @@ function workspaceEndpoints(app) {
         const { failedToEmbed = [], errors = [] } = await Document.addDocuments(
           currWorkspace,
           adds,
-          response.locals?.user?.id
+          response.locals?.user?.id,
+          forceReEmbed
         );
         const updatedWorkspace = await Workspace.get({ id: currWorkspace.id });
         response.status(200).json({
@@ -923,7 +925,8 @@ function workspaceEndpoints(app) {
           {
             documentName: originalname,
           },
-          response.locals?.user?.id
+          response.locals?.user?.id,
+          true // Enable batching for bulk uploads
         );
 
         const document = documents[0];
