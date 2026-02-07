@@ -35,7 +35,7 @@ services:
       - "../collector/hotdir/:/app/collector/hotdir"
       - "../collector/outputs/:/app/collector/outputs"
       - "../:/app/anything-llm"
-      - "/home/zphilip/HybridAI/mything-llm:/app/mything-llm"
+      - "../../mything-llm:/app/mything-llm"
     user: "${UID:-1000}:${GID:-1000}"
     ports:
       - "5001:3001"

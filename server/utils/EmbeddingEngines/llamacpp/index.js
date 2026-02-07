@@ -14,7 +14,7 @@ class LlamaCppEmbedder {
 
     this.basePath = `${process.env.EMBEDDING_BASE_PATH}/embedding`;
     this.model = process.env.EMBEDDING_MODEL_PREF;
-    this.embedding_dimension = process.env.EMBEDDING_MODEL_DIM || 1536;
+    this.embedding_dimension = process.env.EMBEDDING_MODEL_DIM || 2048; // Default to 2048 for Qwen3-VL
     this.image2text_basePath = `${process.env.IMAGE2TEXT_BASE_PATH}/v1/chat/completions`;    
     this.image2text_model = process.env.IMAGE2TEXT_MODEL_PREF;;
     // Limit of how many strings we can process in a single pass to stay with resource or network limits
@@ -580,16 +580,34 @@ class LlamaCppEmbedder {
       // Payload structure: { content: [{ prompt_string: "text <__media__>", multimodal_data: [base64] }] }
       // CRITICAL: prompt_string must include marker <__media__> to reference the image
       // let description = "what's the image about?";
-      const promptText = description ? `${description} <__media__>` : "<__media__>";
-      
+      // 1. 定义任务指令（如果是为了存入数据库供后续搜索，使用这个前缀）
+      const instruction = "Retrieve images or text relevant to the user's query: ";
+
+      // 2. 构造符合 Qwen3-VL 规范的 Prompt
+      // 建议格式：指令 + 视觉标记 + 描述文本
+      //const promptText = `${instruction}<|im_start|><__media__><|im_end|>${description ? description : ""}`;
+      //const promptText = description ? `${description}<|im_start|><__media__><|im_end|>` : "<__media__>";
+      const promptText = `${instruction}<|im_start|><__media__><|im_end|>${description ? description : ""}`;
+
+      // FORMAT 1: Qwen3-VL style with special tokens (current format)
       const payload = {
         content: [
           {
             prompt_string: promptText,  // Description + <__media__> marker
             multimodal_data: [resizedBase64]  // Raw base64 (no data URI prefix)
           }
-        ]
+        ],
+        parameter: { output_dimension: this.embedding_dimension } // Ensure output dimension matches model
       };
+      
+      // FORMAT 2: Alternative image_data format (as per llama.cpp embedding API)
+      // This format uses "Image: [img-0]" reference style
+      // Uncomment to use this format instead:
+      const payloadAlternative = {
+        content: "Image: [img-0]", // 保持纯净，只标识图片位置
+        image_data: [{ data: resizedBase64, id: 0 }]
+      };
+      
       
       console.log(`[MULTIMODAL EMBEDDER] Sending request to ${embedUrl}`);
       console.log(`[MULTIMODAL EMBEDDER] Image base64 length: ${resizedBase64.length} chars`);
@@ -605,7 +623,7 @@ class LlamaCppEmbedder {
         multimodal_data_first_item_preview: payload.content[0].multimodal_data[0].substring(0, 60) + '...'
       });
       
-      const requestBody = JSON.stringify(payload);
+      const requestBody = JSON.stringify(payloadAlternative);
       console.log(`[MULTIMODAL EMBEDDER] Total request body size: ${requestBody.length} bytes`);
       
       const response = await fetch(embedUrl, {
@@ -670,19 +688,34 @@ class LlamaCppEmbedder {
    */
   async embedTextWithMultimodal(text, basePath, model) {
     try {
+      // Input validation
+      if (!text || typeof text !== 'string') {
+        throw new Error(`Invalid text input: ${typeof text}`);
+      }
+      if (!basePath || typeof basePath !== 'string') {
+        throw new Error(`Invalid basePath: ${basePath}`);
+      }
+      if (!model || typeof model !== 'string') {
+        throw new Error(`Invalid model: ${model}`);
+      }
+      
       console.log(`[MULTIMODAL EMBEDDER TEXT] === NEW QUERY REQUEST ===`);
       console.log(`[MULTIMODAL EMBEDDER TEXT] Raw input text: "${text}"`);
       console.log(`[MULTIMODAL EMBEDDER TEXT] Text length: ${text.length}`);
       console.log(`[MULTIMODAL EMBEDDER TEXT] Text type: ${typeof text}`);
       console.log(`[MULTIMODAL EMBEDDER TEXT] Base Path: ${basePath}`);
       console.log(`[MULTIMODAL EMBEDDER TEXT] Model: ${model}`);
+      console.log(`[MULTIMODAL EMBEDDER TEXT] Expected dimension: ${this.embedding_dimension}`);
       
       const embedUrl = `${basePath}/embedding`;
       
       // CRITICAL: Don't use instruction prefixes with multimodal embedders
       // They can cause severe cache pollution in llama.cpp server
       // Just use the raw query text for better semantic matching
-      const searchQuery = text;
+      // --- 修改查询端 (Query) 代码 ---
+      const instruction = "Instruct: Given a search query, retrieve relevant images.";
+      const searchQuery = `${instruction}\nQuery:${text}`; // 必须带上相同的指令头
+      //const searchQuery = text;
       
       console.log(`[MULTIMODAL EMBEDDER TEXT] Query for embedding: "${searchQuery}"`);
       console.log(`[MULTIMODAL EMBEDDER TEXT] Query hash: ${searchQuery.split('').reduce((a,b)=>{a=((a<<5)-a)+b.charCodeAt(0);return a&a},0)}`);
@@ -694,27 +727,67 @@ class LlamaCppEmbedder {
             prompt_string: searchQuery  // Raw query text
           }
         ],
-        cache_prompt: false  // Disable prompt caching to ensure fresh embeddings
+        parameter: { output_dimension: this.embedding_dimension }, // Ensure output dimension matches model
+        //cache_prompt: false  // Disable prompt caching to ensure fresh embeddings
+      };
+
+      // FORMAT 2: Alternative query-only payload (example from curl)
+      // Uncomment to use this format instead:
+      const payloadAlternative = {
+        content: searchQuery
       };
       
-      console.log(`[MULTIMODAL EMBEDDER TEXT] Sending request to ${embedUrl}`);
       
-      const response = await fetch(embedUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload),
+      console.log(`[MULTIMODAL EMBEDDER TEXT] Sending request to ${embedUrl}`);
+      console.log(`[MULTIMODAL EMBEDDER TEXT] Payload structure:`, {
+        content_length: payload.content.length,
+        has_prompt_string: !!payload.content[0]?.prompt_string,
+        parameter: payload.parameter
       });
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+      
+      let response;
+      try {
+        response = await fetch(embedUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payloadAlternative),
+          signal: controller.signal
+        });
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        console.error(`[MULTIMODAL EMBEDDER TEXT] Fetch failed:`, fetchError);
+        throw new Error(`Network error calling multimodal embedder: ${fetchError.message}`);
+      }
+      
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
-        const errorText = await response.text();
+        let errorText;
+        try {
+          errorText = await response.text();
+        } catch (e) {
+          errorText = 'Unable to read error response';
+        }
         console.error(`[MULTIMODAL EMBEDDER TEXT] HTTP error: ${response.status} - ${errorText}`);
         throw new Error(`Multimodal embedder text API error: ${response.status} - ${errorText}`);
       }
 
-      const responseData = await response.json();
-      console.log(`[MULTIMODAL EMBEDDER TEXT] Response received, parsing...`);
+      let responseData;
+      try {
+        responseData = await response.json();
+        console.log(`[MULTIMODAL EMBEDDER TEXT] Response received, parsing...`);
+        console.log(`[MULTIMODAL EMBEDDER TEXT] Response type:`, typeof responseData, 'isArray:', Array.isArray(responseData));
+      } catch (jsonError) {
+        console.error(`[MULTIMODAL EMBEDDER TEXT] JSON parsing failed:`, jsonError);
+        const rawText = await response.text();
+        console.error(`[MULTIMODAL EMBEDDER TEXT] Raw response (first 500 chars):`, rawText.substring(0, 500));
+        throw new Error(`Failed to parse multimodal embedder response as JSON: ${jsonError.message}`);
+      }
       
       // Extract embedding from llamacpp-python format
       const embedding = responseData?.[0]?.embedding?.[0];
@@ -729,6 +802,14 @@ class LlamaCppEmbedder {
       }
       
       console.log(`[MULTIMODAL EMBEDDER TEXT] ✓ Successfully received embedding with ${embedding.length} dimensions`);
+      
+      // Check for dimension mismatch
+      if (embedding.length !== this.embedding_dimension) {
+        console.warn(`[MULTIMODAL EMBEDDER TEXT] ⚠️ DIMENSION MISMATCH!`);
+        console.warn(`  Expected: ${this.embedding_dimension}`);
+        console.warn(`  Received: ${embedding.length}`);
+        console.warn(`  This will cause search failures if collection was created with different dimensions!`);
+      }
       
       // Normalize the embedding
       const embeddingMagnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
@@ -746,7 +827,15 @@ class LlamaCppEmbedder {
       
       return normalizedEmbedding;
     } catch (error) {
-      console.error('[MULTIMODAL EMBEDDER TEXT] Error embedding text:', error);
+      console.error('[MULTIMODAL EMBEDDER TEXT] ❌ CRITICAL ERROR:', error);
+      console.error('[MULTIMODAL EMBEDDER TEXT] Error stack:', error.stack);
+      console.error('[MULTIMODAL EMBEDDER TEXT] Context:', {
+        text: text?.substring(0, 100) + '...',
+        textLength: text?.length,
+        basePath,
+        model,
+        expectedDimension: this.embedding_dimension
+      });
       throw new Error(`Failed to embed text with multimodal embedder: ${error.message}`);
     }
   }

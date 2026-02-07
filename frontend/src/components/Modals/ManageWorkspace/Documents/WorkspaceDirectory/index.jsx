@@ -25,6 +25,7 @@ function WorkspaceDirectory({
   saveChanges,
   embeddingCosts,
   movedItems,
+  embeddedFilesCount = 0,
 }) {
   const { t } = useTranslation();
   const [selectedItems, setSelectedItems] = useState({});
@@ -73,7 +74,7 @@ function WorkspaceDirectory({
         adds: [],
         deletes: itemsToRemove,
       });
-      await fetchKeys(true, true); // Force full resync after deletion
+      await fetchKeys(true, false); // Backend updates cached status in Redis automatically
       setSelectedItems({});
     } catch (error) {
       console.error("Failed to remove documents:", error);
@@ -120,9 +121,16 @@ function WorkspaceDirectory({
     <>
       <div className="px-8">
         <div className="flex items-center justify-start w-[560px]">
-          <h3 className="text-white text-base font-bold ml-5">
-            {workspace.name}
-          </h3>
+          <div className="flex items-center gap-x-2 ml-5">
+            <h3 className="text-white text-base font-bold">
+              {workspace.name}
+            </h3>
+            {embeddedFilesCount > 0 && (
+              <span className="text-white text-base font-bold">
+                ({embeddedFilesCount} {embeddedFilesCount === 1 ? 'file' : 'files'} embedded)
+              </span>
+            )}
+          </div>
         </div>
         <div className="relative w-[560px] h-[445px] mt-5">
           <div

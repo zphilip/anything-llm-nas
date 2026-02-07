@@ -102,6 +102,32 @@ function trashFile(filepath) {
   }
 
   fs.rmSync(filepath);
+
+  // Update Redis per-folder index/metadata if available (fire-and-forget)
+  try {
+    if (redisHelper) {
+      const redisModule = require('./redis');
+      const REDIS_KEYS = redisModule.REDIS_KEYS;
+      const rel = path.relative(documentsFolder, filepath).replace(/\\/g, '/');
+      if (rel && !rel.startsWith('..')) {
+        const folderName = path.dirname(rel);
+        const fileName = path.basename(rel);
+        // Remove from folder index
+        redisHelper.removeFileFromFolder(folderName, fileName).catch((err) => {
+          console.warn('Failed to remove file from Redis folder index:', err && err.message ? err.message : err);
+        });
+        // Remove per-file metadata key if present
+        try {
+          if (redisHelper.redis && REDIS_KEYS && REDIS_KEYS.FILE_METADATA) {
+            redisHelper.redis.del(REDIS_KEYS.FILE_METADATA + `${folderName}:${fileName}`).catch(() => {});
+          }
+        } catch {}
+      }
+    }
+  } catch (err) {
+    // ignore
+  }
+
   return;
 }
 
@@ -148,14 +174,31 @@ function writeToServerDocuments({
     encoding: "utf-8",
   });
 
-  return {
+  const result = {
     ...data,
-    // relative location string that can be passed into the /update-embeddings api
-    // that will work since we know the location exists and since we only allow
-    // 1-level deep folders this will always work. This still works for integrations like GitHub and YouTube.
     location: destinationFilePath.split("/").slice(-2).join("/"),
     isDirectUpload: options.parseOnly || false,
   };
+
+  // Save metadata to Redis (per-file and per-folder) if available
+  if (redisHelper) {
+    const folderName = path.dirname(result.location) || "";
+    const fileName = path.basename(result.location);
+    // Save per-file metadata (async, don't block caller)
+    redisHelper.saveFileMetadata(folderName, fileName, result).catch((err) => {
+      console.error("Error saving document metadata to Redis:", err && err.message ? err.message : err);
+    });
+    // Prepare a sanitized picker-style entry for the folder (no large fields)
+    const { pageContent, imageBase64, ...metadata } = data;
+    const fileEntry = { name: fileName, type: "file", ...metadata };
+    redisHelper.addFileToFolder(folderName, fileEntry).then(() => {
+      console.log(`📡 Saved metadata and folder index for ${folderName}/${fileName}`);
+    }).catch((err) => {
+      console.error("Error adding file to folder in Redis:", err && err.message ? err.message : err);
+    });
+  }
+
+  return result;
 }
 
 // When required we can wipe the entire collector hotdir and tmp storage in case
@@ -306,10 +349,26 @@ async function writeToServerDocumentsWithChunks(data = {}, filename, destination
       writeStream.on('error', reject);
     });
 
-    return {
+    const result = {
       ...data,
       location: destinationFilePath.split("/").slice(-2).join("/"),
     };
+
+    if (redisHelper) {
+      try {
+        const folderName = path.dirname(result.location) || "";
+        const fileName = path.basename(result.location);
+        await redisHelper.saveFileMetadata(folderName, fileName, result);
+        const { pageContent, imageBase64, ...metadata } = data;
+        const fileEntry = { name: fileName, type: "file", ...metadata };
+        await redisHelper.addFileToFolder(folderName, fileEntry);
+        console.log(`📡 Saved chunked document metadata for ${folderName}/${fileName}`);
+      } catch (err) {
+        console.error('Error saving chunked document metadata to Redis:', err.message);
+      }
+    }
+
+    return result;
 
   } catch (error) {
     console.error('Error writing document with chunks:', error);
@@ -318,6 +377,11 @@ async function writeToServerDocumentsWithChunks(data = {}, filename, destination
     if (global.gc) global.gc();
   }
 }
+
+  // After chunked write, save metadata to Redis if available
+  // Note: callers of this function expect the returned object, so
+  // the caller will handle Redis saving. For safety, we attempt
+  // to save here as well if redisHelper exists.
 
 /**
  * Handle file metadata caching with Redis (if available)

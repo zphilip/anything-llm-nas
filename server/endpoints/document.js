@@ -66,13 +66,55 @@ function documentEndpoints(app) {
             )
               return reject("Invalid file location");
 
-            fs.rename(sourcePath, destinationPath, (err) => {
+            fs.rename(sourcePath, destinationPath, async (err) => {
               if (err) {
                 console.error(`Error moving file ${from} to ${to}:`, err);
-                reject(err);
-              } else {
-                resolve();
+                return reject(err);
               }
+
+              // Keep Redis file metadata and folder indexes in sync
+              try {
+                const { redisHelper, REDIS_KEYS, redis } = require("../utils/files/redis");
+                const srcFolder = path.dirname(from);
+                const srcFile = path.basename(from);
+                const dstFolder = path.dirname(to);
+                const dstFile = path.basename(to);
+
+                // Attempt to move per-file metadata if it exists
+                try {
+                  const metadata = await redisHelper.getFileMetadata(srcFolder, srcFile);
+                  if (metadata) {
+                    await redisHelper.saveFileMetadata(dstFolder, dstFile, metadata);
+                    // Remove old metadata key
+                    try {
+                      await redis.del(REDIS_KEYS.FILE_METADATA + `${srcFolder}:${srcFile}`);
+                    } catch (e) {
+                      console.warn('Failed to delete old file metadata key in Redis:', e.message);
+                    }
+                  }
+                } catch (e) {
+                  console.warn('Failed to move file metadata in Redis:', e.message);
+                }
+
+                // Update folder indexes
+                try {
+                  await redisHelper.removeFileFromFolder(srcFolder, srcFile);
+                } catch (e) {
+                  console.warn('Failed to remove file from source folder index in Redis:', e.message);
+                }
+
+                try {
+                  // Use minimal metadata entry for folder index to avoid loading file content
+                  const fileEntry = { name: dstFile, type: 'file' };
+                  await redisHelper.addFileToFolder(dstFolder, fileEntry);
+                } catch (e) {
+                  console.warn('Failed to add file to destination folder index in Redis:', e.message);
+                }
+              } catch (e) {
+                console.warn('Redis sync skipped due to error:', e.message);
+              }
+
+              resolve();
             });
           });
         });

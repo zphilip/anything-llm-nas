@@ -304,11 +304,21 @@ app.post(
 
 app.get('/processStatus/:processId', (req, res) => {
   const processId = req.params.processId;
+  console.log(`[processStatus] Looking for processId: ${processId}`);
+  console.log(`[processStatus] Active processes: ${Array.from(activeProcesses.keys()).join(', ') || 'NONE'}`);
+  
   if (!activeProcesses.has(processId)) {
-    return res.status(404).json({ message: 'Process not found' });
+    console.log(`[processStatus] Process ${processId} NOT FOUND - returning expired status`);
+    // Return expired status instead of 404 to allow frontend to handle gracefully
+    return res.json({ 
+      status: 'expired', 
+      progress: 100, 
+      message: 'Process has expired and been cleaned up' 
+    });
   }
   
   const status = activeProcesses.get(processId);
+  console.log(`[processStatus] Process ${processId} found - status: ${status.status}, progress: ${status.progress}`);
   res.json(status);
 });
 

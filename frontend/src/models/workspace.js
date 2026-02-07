@@ -40,11 +40,11 @@ const Workspace = {
     return { workspace, message };
   },
   modifyEmbeddings: async function (slug, changes = {}) {
-    const { workspace, message } = await fetch(
+    const response = await fetch(
       `${API_BASE}/workspace/${slug}/update-embeddings`,
       {
         method: "POST",
-        body: JSON.stringify(changes), // contains 'adds' and 'removes' keys that are arrays of filepaths
+        body: JSON.stringify(changes), // contains 'adds', 'deletes', 'forceReEmbed', and 'useSession' keys
         headers: baseHeaders(),
       }
     )
@@ -53,7 +53,13 @@ const Workspace = {
         return { workspace: null, message: e.message };
       });
 
-    return { workspace, message };
+    // If session mode, response contains sessionId and status
+    if (response.sessionId) {
+      return { sessionId: response.sessionId, status: response.status, success: response.success };
+    }
+
+    // Otherwise, traditional response
+    return { workspace: response.workspace, message: response.message };
   },
   chatHistory: async function (slug) {
     const history = await fetch(`${API_BASE}/workspace/${slug}/chats`, {
@@ -572,6 +578,82 @@ const Workspace = {
         return { workspaces: [], threads: [] };
       });
     return response;
+  },
+
+  /**
+   * Get embedding session status
+   * @param {string} slug - workspace slug
+   * @param {string} sessionId - optional session ID, omit to get all sessions
+   * @returns {Promise<{success: boolean, status: object, sessions?: array, activeSession?: object}>}
+   */
+  embeddingStatus: async function (slug, sessionId = null) {
+    const endpoint = sessionId 
+      ? `${API_BASE}/workspace/${slug}/embedding-status/${sessionId}`
+      : `${API_BASE}/workspace/${slug}/embedding-status`;
+    
+    return await fetch(endpoint, {
+      method: "GET",
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .catch((e) => {
+        console.error(e);
+        return { success: false, error: e.message };
+      });
+  },
+
+  /**
+   * Pause embedding session
+   * @param {string} slug - workspace slug
+   * @param {string} sessionId - session ID
+   * @returns {Promise<{success: boolean, status: object}>}
+   */
+  pauseEmbedding: async function (slug, sessionId) {
+    return await fetch(`${API_BASE}/workspace/${slug}/pause-embedding/${sessionId}`, {
+      method: "POST",
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .catch((e) => {
+        console.error(e);
+        return { success: false, error: e.message };
+      });
+  },
+
+  /**
+   * Resume embedding session
+   * @param {string} slug - workspace slug
+   * @param {string} sessionId - session ID
+   * @returns {Promise<{success: boolean, status: object}>}
+   */
+  resumeEmbedding: async function (slug, sessionId) {
+    return await fetch(`${API_BASE}/workspace/${slug}/resume-embedding/${sessionId}`, {
+      method: "POST",
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .catch((e) => {
+        console.error(e);
+        return { success: false, error: e.message };
+      });
+  },
+
+  /**
+   * Cancel embedding session
+   * @param {string} slug - workspace slug
+   * @param {string} sessionId - session ID
+   * @returns {Promise<{success: boolean, status: object}>}
+   */
+  cancelEmbedding: async function (slug, sessionId) {
+    return await fetch(`${API_BASE}/workspace/${slug}/cancel-embedding/${sessionId}`, {
+      method: "POST",
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .catch((e) => {
+        console.error(e);
+        return { success: false, error: e.message };
+      });
   },
 
   threads: WorkspaceThread,

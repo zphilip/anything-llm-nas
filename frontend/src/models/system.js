@@ -50,7 +50,12 @@ const System = {
         if (!res.ok) throw new Error("Could not find setup information.");
         return res.json();
       })
-      .then((res) => res.localFiles)
+      .then((res) => {
+        // Return full response to access both localFiles and totalFiles
+        // For backward compatibility, if localFiles exists in response, return the whole response
+        // Otherwise return the response as-is (old format)
+        return res.localFiles ? res : { localFiles: res, totalFiles: 0 };
+      })
       .catch(() => null);
   },
   needsAuthCheck: function () {
@@ -847,6 +852,127 @@ const System = {
     agentPlugins: AgentPlugins,
   },
   promptVariables: SystemPromptVariable,
+
+  // Incremental Resync API
+  /**
+   * Start a new incremental resync session
+   * @param {Object} options - Resync options
+   * @param {number} [options.batchSize=20] - Number of files to process per batch
+   * @param {string[]} [options.folders] - Specific folders to resync (optional)
+   * @returns {Promise<{success: boolean, sessionId: string, error?: string}>}
+   */
+  startResync: async function (options = {}) {
+    return fetch(`${API_BASE}/system/start-resync`, {
+      method: "POST",
+      headers: baseHeaders(),
+      body: JSON.stringify(options),
+    })
+      .then((res) => res.json())
+      .catch((e) => {
+        console.error("Failed to start resync:", e);
+        return { success: false, error: e.message };
+      });
+  },
+
+  /**
+   * Get status of a resync session
+   * @param {string} [sessionId] - Session ID (optional, returns all sessions if omitted)
+   * @returns {Promise<Object>}
+   */
+  getResyncStatus: async function (sessionId = null) {
+    const url = sessionId
+      ? `${API_BASE}/system/resync-status/${sessionId}`
+      : `${API_BASE}/system/resync-status`;
+    return fetch(url, {
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .then((res) => (sessionId ? res.session : res.sessions))
+      .catch((e) => {
+        console.error("Failed to get resync status:", e);
+        return null;
+      });
+  },
+
+  /**
+   * Pause an active resync session
+   * @param {string} sessionId - Session ID to pause
+   * @returns {Promise<{success: boolean, error?: string}>}
+   */
+  pauseResync: async function (sessionId) {
+    return fetch(`${API_BASE}/system/pause-resync/${sessionId}`, {
+      method: "POST",
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .catch((e) => {
+        console.error("Failed to pause resync:", e);
+        return { success: false, error: e.message };
+      });
+  },
+
+  /**
+   * Resume a paused resync session
+   * @param {string} sessionId - Session ID to resume
+   * @returns {Promise<{success: boolean, error?: string}>}
+   */
+  resumeResync: async function (sessionId) {
+    return fetch(`${API_BASE}/system/resume-resync/${sessionId}`, {
+      method: "POST",
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .catch((e) => {
+        console.error("Failed to resume resync:", e);
+        return { success: false, error: e.message };
+      });
+  },
+
+  /**
+   * Cancel an active resync session
+   * @param {string} sessionId - Session ID to cancel
+   * @returns {Promise<{success: boolean, error?: string}>}
+   */
+  cancelResync: async function (sessionId) {
+    return fetch(`${API_BASE}/system/cancel-resync/${sessionId}`, {
+      method: "POST",
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .catch((e) => {
+        console.error("Failed to cancel resync:", e);
+        return { success: false, error: e.message };
+      });
+  },
+
+  /**
+   * Connect to SSE stream for real-time resync progress updates
+   * @param {string} sessionId - Session ID to monitor
+   * @returns {Promise<EventSource>}
+   */
+  connectToResyncProgress: async function (sessionId) {
+    return new Promise((resolve, reject) => {
+      try {
+        const eventSource = new EventSource(
+          `${API_BASE}/system/resync-progress/${sessionId}`,
+          { withCredentials: true }
+        );
+
+        eventSource.onopen = () => {
+          console.log("SSE connection opened for session:", sessionId);
+          resolve(eventSource);
+        };
+
+        eventSource.onerror = (error) => {
+          console.error("SSE connection error:", error);
+          eventSource.close();
+          reject(error);
+        };
+      } catch (error) {
+        reject(error);
+      }
+    });
+  },
 };
 
 export default System;

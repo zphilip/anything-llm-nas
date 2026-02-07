@@ -213,7 +213,7 @@ function workspaceEndpoints(app) {
       try {
         const user = await userFromSession(request, response);
         const { slug = null } = request.params;
-        const { adds = [], deletes = [], forceReEmbed = false } = reqBody(request);
+        const { adds = [], deletes = [], forceReEmbed = false, useSession = false } = reqBody(request);
         const currWorkspace = multiUserMode(response)
           ? await Workspace.getWithUser(user, { slug })
           : await Workspace.get({ slug });
@@ -223,11 +223,38 @@ function workspaceEndpoints(app) {
           return;
         }
 
+        // Remove documents first
         await Document.removeDocuments(
           currWorkspace,
           deletes,
           response.locals?.user?.id
         );
+
+        // If useSession is true, create a session for async processing with progress tracking
+        if (useSession && adds.length > 0) {
+          const { embeddingSessionManager } = require('../utils/files/EmbeddingSessionManager');
+          const { startEmbeddingSession } = require('../utils/files/embedDocuments');
+
+          const session = embeddingSessionManager.createSession({
+            workspaceId: currWorkspace.id,
+            workspaceName: currWorkspace.slug,
+            documentPaths: adds,
+            userId: response.locals?.user?.id,
+            forceReEmbed,
+          });
+
+          // Start processing in background
+          startEmbeddingSession(session.id);
+
+          return response.status(200).json({
+            success: true,
+            sessionId: session.id,
+            status: embeddingSessionManager.getStatus(session.id),
+            message: `Started embedding ${adds.length} documents in background`,
+          });
+        }
+
+        // Original synchronous behavior
         const { failedToEmbed = [], errors = [] } = await Document.addDocuments(
           currWorkspace,
           adds,
@@ -243,6 +270,120 @@ function workspaceEndpoints(app) {
                   .map((msg) => `${msg}`)
                   .join("\n\n")}`
               : null,
+        });
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  // Get embedding session status
+  app.get(
+    "/workspace/:slug/embedding-status/:sessionId?",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { sessionId } = request.params;
+        const { embeddingSessionManager } = require('../utils/files/EmbeddingSessionManager');
+
+        if (sessionId) {
+          const status = embeddingSessionManager.getStatus(sessionId);
+          if (!status) {
+            return response.status(404).json({ success: false, error: 'Session not found' });
+          }
+          return response.status(200).json({ success: true, status });
+        } else {
+          // Return all sessions
+          const allSessions = embeddingSessionManager.getAllSessions().map(s => 
+            embeddingSessionManager.getStatus(s.id)
+          );
+          return response.status(200).json({ 
+            success: true, 
+            sessions: allSessions,
+            activeSession: embeddingSessionManager.getActiveSession() 
+              ? embeddingSessionManager.getStatus(embeddingSessionManager.getActiveSession().id)
+              : null
+          });
+        }
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  // Pause embedding session
+  app.post(
+    "/workspace/:slug/pause-embedding/:sessionId",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { sessionId } = request.params;
+        const { embeddingSessionManager } = require('../utils/files/EmbeddingSessionManager');
+
+        const paused = embeddingSessionManager.pause(sessionId);
+        if (!paused) {
+          return response.status(400).json({ success: false, error: 'Session not found or cannot be paused' });
+        }
+
+        return response.status(200).json({ 
+          success: true, 
+          status: embeddingSessionManager.getStatus(sessionId) 
+        });
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  // Resume embedding session
+  app.post(
+    "/workspace/:slug/resume-embedding/:sessionId",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { sessionId } = request.params;
+        const { embeddingSessionManager } = require('../utils/files/EmbeddingSessionManager');
+        const { startEmbeddingSession } = require('../utils/files/embedDocuments');
+
+        const resumed = embeddingSessionManager.resume(sessionId);
+        if (!resumed) {
+          return response.status(400).json({ success: false, error: 'Session not found or cannot be resumed' });
+        }
+
+        // Restart processing
+        startEmbeddingSession(sessionId);
+
+        return response.status(200).json({ 
+          success: true, 
+          status: embeddingSessionManager.getStatus(sessionId) 
+        });
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  // Cancel embedding session
+  app.post(
+    "/workspace/:slug/cancel-embedding/:sessionId",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { sessionId } = request.params;
+        const { embeddingSessionManager } = require('../utils/files/EmbeddingSessionManager');
+
+        const canceled = embeddingSessionManager.cancel(sessionId);
+        if (!canceled) {
+          return response.status(404).json({ success: false, error: 'Session not found' });
+        }
+
+        return response.status(200).json({ 
+          success: true, 
+          status: embeddingSessionManager.getStatus(sessionId) 
         });
       } catch (e) {
         console.error(e.message, e);

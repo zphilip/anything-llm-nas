@@ -22,6 +22,8 @@ const hotdirPath =
 
 // Cache file for storing directory structure
 const CACHE_FILE = path.join(__dirname, '../../storage/cache/localFiles.json');
+// Per-folder cache directory (stores small metadata-only caches)
+const FOLDER_CACHE_DIR = path.join(__dirname, '../../storage/cache/folders');
 
 // Batch size for processing files
 const BATCH_SIZE = 100;
@@ -39,80 +41,260 @@ async function fileData(filePath = null) {
 }
 
 async function viewLocalFiles(rescan = false) {
+// Threshold (ms) for logging detailed per-file timings. Set via RESYNC_SLOW_MS env.
+const RESYNC_SLOW_MS = parseInt(process.env.RESYNC_SLOW_MS || "2000");
+
   try {
+    console.log('[SERVER MEMORY] viewLocalFiles START:', process.memoryUsage());
     // Create cache directory if it doesn't exist
+    const overallStart = process.hrtime();
     const cacheDir = path.dirname(CACHE_FILE);
     if (!fs.existsSync(cacheDir)) {
       fs.mkdirSync(cacheDir, { recursive: true });
     }
     
-    // Try to read from cache if rescan is false
-    if (!rescan && fs.existsSync(CACHE_FILE)) {
+    // // Try to read from cache if rescan is false
+    // if (!rescan && fs.existsSync(CACHE_FILE)) {
+    //   try {
+    //     console.log('[SERVER MEMORY] Before reading cache file:', process.memoryUsage());
+    //     const cachedData = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+    //     console.log('[SERVER MEMORY] After reading cache file:', process.memoryUsage());
+    //     console.log('✅ Loaded directory structure from cache');
+    //     return cachedData;
+    //   } catch (error) {
+    //     console.warn('⚠️ Error reading cache file, rescanning:', error.message);
+    //   }
+    // }
+
+    // New: Assemble directory from per-folder Redis keys to avoid loading full tree
+    if (!rescan) {
       try {
-        const cachedData = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-        console.log('✅ Loaded directory structure from cache');
-        return cachedData;
+        const { redisHelper } = require("./redis");
+        // If documentsPath doesn't exist yet, create it and return empty directory
+        if (!fs.existsSync(documentsPath)) fs.mkdirSync(documentsPath, { recursive: true });
+
+        const directory = {
+          name: "documents",
+          type: "folder",
+          items: [],
+        };
+
+        for (const file of fs.readdirSync(documentsPath)) {
+          const folderPath = path.resolve(documentsPath, file);
+          if (!fs.lstatSync(folderPath).isDirectory()) continue;
+          // Try to get per-folder data from Redis
+          const tRedisStart = process.hrtime();
+          let subdocs = await redisHelper.getFolderData(file);
+          const tRedis = process.hrtime(tRedisStart);
+          console.log(`[RESYNC] getFolderData '${file}' took ${tRedis[0]}s ${Math.round(tRedis[1]/1e6)}ms - ${subdocs ? 'HIT' : 'MISS'}`);
+          
+          if (subdocs) {
+            // Redis HIT - sync to disk cache to keep them in sync
+            const itemCount = subdocs.items?.length || 0;
+            console.log(`[CACHE SYNC] Redis has ${itemCount} items for '${file}'`);
+            try {
+              saveFolderCache(file, subdocs);
+              console.log(`[CACHE SYNC] Synced Redis data (${itemCount} items) for '${file}' to disk cache`);
+            } catch (err) {
+              console.warn(`[CACHE SYNC] Failed to sync '${file}' to disk:`, err.message);
+            }
+          }
+          if (!subdocs) {
+            // Fallback: scan the folder and build its data (only for this folder)
+            const folderScanStart = process.hrtime();
+            subdocs = { name: file, type: 'folder', items: [] };
+            const subfiles = fs.readdirSync(folderPath);
+            const filenames = {};
+            const liveSyncAvailableForFolder = await DocumentSyncQueue.enabled();
+            const smallTaskFns = [];
+            const largeTaskFns = [];
+            for (let i = 0; i < subfiles.length; i++) {
+              const subfile = subfiles[i];
+              const cachefilename = `${file}/${subfile}`;
+              if (path.extname(subfile) !== ".json") continue;
+              const fullPath = path.join(folderPath, subfile);
+              let stat = null;
+              try { stat = fs.statSync(fullPath); } catch (e) {}
+              const isLarge = stat && stat.size >= FILE_READ_SIZE_THRESHOLD;
+              const task = () => fileToPickerData({
+                pathToFile: fullPath,
+                liveSyncAvailable: liveSyncAvailableForFolder,
+                cachefilename,
+              });
+              if (isLarge) largeTaskFns.push(task); else smallTaskFns.push(task);
+              filenames[cachefilename] = subfile;
+            }
+            const pStart = process.hrtime();
+            let lastSeen = 0;
+            const runProgress = (completed, total) => {
+              const delta = completed - lastSeen;
+              lastSeen = completed;
+              if (completed % 50 === 0 || completed === total) {
+                console.log(`${new Date().toISOString()} [RESYNC] folder '${file}' progress ${completed}/${total}`);
+              }
+            };
+
+            // Run small tasks in parallel, then large tasks sequentially to reduce IO contention
+            const smallResults = (smallTaskFns.length > 0)
+              ? (await runWithConcurrency(smallTaskFns, RESYNC_CONCURRENCY, runProgress))
+              : [];
+            const largeResults = (largeTaskFns.length > 0)
+              ? (await runWithConcurrency(largeTaskFns, RESYNC_LARGE_CONCURRENCY, runProgress))
+              : [];
+
+            const results = [...smallResults, ...largeResults]
+              .filter((i) => !!i)
+              .filter((i) => hasRequiredMetadata(i));
+            const pElapsed = process.hrtime(pStart);
+            const folderScanElapsed = process.hrtime(folderScanStart);
+            console.log(`[RESYNC] scanned folder '${file}' files=${subfiles.length} processed=${results.length} scan ${folderScanElapsed[0]}s ${Math.round(folderScanElapsed[1]/1e6)}ms (processing ${Math.round(pElapsed[1]/1e6)}ms)`);
+            subdocs.items.push(...results);
+
+            // Attach pinned and watched info
+            const pinnedWorkspacesByDocument = await getPinnedWorkspacesByDocument(filenames);
+            const watchedDocumentsFilenames = await getWatchedDocumentFilenames(filenames);
+            for (const item of subdocs.items) {
+              item.pinnedWorkspaces = pinnedWorkspacesByDocument[item.name] || [];
+              item.watched = watchedDocumentsFilenames.hasOwnProperty(item.name) || false;
+            }
+
+            // Save per-folder data to Redis and disk (keep in sync)
+            try {
+              const tSaveStart = process.hrtime();
+              await redisHelper.saveFolderData(file, subdocs);
+              const tSave = process.hrtime(tSaveStart);
+              console.log(`[RESYNC] saveFolderData '${file}' took ${tSave[0]}s ${Math.round(tSave[1]/1e6)}ms`);
+            } catch (err) {
+              console.warn('Failed to save folder data to Redis for', file, err && err.message ? err.message : err);
+            }
+            try {
+              saveFolderCache(file, subdocs);
+              console.log(`[CACHE SYNC] Synced '${file}' to disk cache`);
+            } catch (err) {
+              // best-effort sync
+            }
+          } else {
+            // If we got folder data from Redis, ensure pinned/watched info is current
+            const filenames = {};
+            for (const item of subdocs.items) {
+              filenames[`${file}/${item.name}`] = item.name;
+            }
+            const tPinnedStart = process.hrtime();
+            const pinnedWorkspacesByDocument = await getPinnedWorkspacesByDocument(filenames);
+            const tPinned = process.hrtime(tPinnedStart);
+            const tWatchedStart = process.hrtime();
+            const watchedDocumentsFilenames = await getWatchedDocumentFilenames(filenames);
+            const tWatched = process.hrtime(tWatchedStart);
+            console.log(`[RESYNC] folder '${file}' pinnedQuery ${tPinned[0]}s ${Math.round(tPinned[1]/1e6)}ms watchedQuery ${tWatched[0]}s ${Math.round(tWatched[1]/1e6)}ms`);
+            for (const item of subdocs.items) {
+              item.pinnedWorkspaces = pinnedWorkspacesByDocument[item.name] || [];
+              item.watched = watchedDocumentsFilenames.hasOwnProperty(item.name) || false;
+            }
+          }
+
+          directory.items.push(subdocs);
+        }
+
+        // Make sure custom-documents is always the first folder in picker
+        directory.items = [
+          directory.items.find((folder) => folder.name === "custom-documents"),
+          ...directory.items.filter((folder) => folder.name !== "custom-documents"),
+        ].filter((i) => !!i);
+
+        console.log('✅ Loaded directory structure from per-folder Redis keys');
+        return directory;
       } catch (error) {
-        console.warn('⚠️ Error reading cache file, rescanning:', error.message);
+        console.warn('⚠️ Error assembling directory from per-folder Redis, rescanning:', error.message);
       }
     }
     
     if (!fs.existsSync(documentsPath)) fs.mkdirSync(documentsPath);
+    console.log('[SERVER MEMORY] Before directory scan:', process.memoryUsage());
     const liveSyncAvailable = await DocumentSyncQueue.enabled();
     const directory = {
       name: "documents",
       type: "folder",
       items: [],
     };
+    // First pass: enumerate folders and count total files to process
+    const folders = fs.readdirSync(documentsPath).filter((f) => {
+      if (path.extname(f) === ".md") return false;
+      const folderPath = path.resolve(documentsPath, f);
+      return fs.existsSync(folderPath) && fs.lstatSync(folderPath).isDirectory();
+    });
 
-    for (const file of fs.readdirSync(documentsPath)) {
-      if (path.extname(file) === ".md") continue;
+    const perFolderFiles = {};
+    let totalFiles = 0;
+    for (const folderName of folders) {
+      const folderPath = path.resolve(documentsPath, folderName);
+      try {
+        const subfiles = fs.readdirSync(folderPath).filter((sf) => path.extname(sf) === ".json");
+        perFolderFiles[folderName] = subfiles;
+        totalFiles += subfiles.length;
+      } catch (err) {
+        perFolderFiles[folderName] = [];
+      }
+    }
+
+    console.log(`[RESYNC] Starting full directory scan: folders=${folders.length} totalFiles=${totalFiles}`);
+
+    // Global progress counter across folders
+    let globalCompleted = 0;
+
+    for (const file of folders) {
       const folderPath = path.resolve(documentsPath, file);
-      const isFolder = fs.lstatSync(folderPath).isDirectory();
-      if (isFolder) {
       const subdocs = {
         name: file,
         type: "folder",
         items: [],
       };
 
-      const subfiles = fs.readdirSync(folderPath);
+      const subfiles = perFolderFiles[file] || [];
       const filenames = {};
-      const filePromises = [];
 
-      for (let i = 0; i < subfiles.length; i++) {
-        const subfile = subfiles[i];
-        const cachefilename = `${file}/${subfile}`;
-        if (path.extname(subfile) !== ".json") continue;
-        filePromises.push(
-          fileToPickerData({
-            pathToFile: path.join(folderPath, subfile),
-            liveSyncAvailable,
-            cachefilename,
-          })
-        );
-        filenames[cachefilename] = subfile;
-      }
-      const results = await Promise.all(filePromises)
-        .then((results) => results.filter((i) => !!i)) // Remove null results
-        .then((results) => results.filter((i) => hasRequiredMetadata(i))); // Remove invalid file structures
-      subdocs.items.push(...results);
-
-      // Grab the pinned workspaces and watched documents for this folder's documents
-      // at the time of the query so we don't have to re-query the database for each file
-      const pinnedWorkspacesByDocument =
-        await getPinnedWorkspacesByDocument(filenames);
-      const watchedDocumentsFilenames =
-        await getWatchedDocumentFilenames(filenames);
-      for (const item of subdocs.items) {
-        item.pinnedWorkspaces = pinnedWorkspacesByDocument[item.name] || [];
-        item.watched =
-          watchedDocumentsFilenames.hasOwnProperty(item.name) || false;
+      if (subfiles.length === 0) {
+        directory.items.push(subdocs);
+        continue;
       }
 
-      directory.items.push(subdocs);
+      // Build tasks for this folder, split by file size to avoid IO contention
+      const smallTaskFns = [];
+      const largeTaskFns = [];
+      for (const subfile of subfiles) {
+        const fullPath = path.join(folderPath, subfile);
+        let stat = null;
+        try { stat = fs.statSync(fullPath); } catch (e) {}
+        const isLarge = stat && stat.size >= FILE_READ_SIZE_THRESHOLD;
+        const task = () => processSingleFile(folderPath, file, subfile, liveSyncAvailable);
+        if (isLarge) largeTaskFns.push(task); else smallTaskFns.push(task);
+      }
+
+      let lastSeen = 0;
+      const progressCb = (completed, total) => {
+        const delta = completed - lastSeen;
+        lastSeen = completed;
+        globalCompleted += delta;
+        if (globalCompleted % 50 === 0 || globalCompleted === totalFiles) {
+          console.log(`${new Date().toISOString()} [RESYNC] progress ${globalCompleted}/${totalFiles}`);
+        }
+      };
+
+      const smallResults = (smallTaskFns.length > 0) ? (await runWithConcurrency(smallTaskFns, RESYNC_CONCURRENCY, progressCb)) : [];
+      const largeResults = (largeTaskFns.length > 0) ? (await runWithConcurrency(largeTaskFns, RESYNC_LARGE_CONCURRENCY, progressCb)) : [];
+
+      const processed = [...smallResults, ...largeResults].filter(Boolean).filter(i => hasRequiredMetadata(i));
+
+      processed.forEach(item => {
+        filenames[`${file}/${item.name}`] = item.name;
+      });
+
+      await processBatch(processed, filenames, subdocs);
+
+      // Persist per-folder cache to disk for faster startup next time
+      try { saveFolderCache(file, subdocs); } catch (err) {}
+
+      if (subdocs.items.length > 0) directory.items.push(subdocs);
     }
-  }
 
   // Make sure custom-documents is always the first folder in picker
   directory.items = [
@@ -120,13 +302,18 @@ async function viewLocalFiles(rescan = false) {
     ...directory.items.filter((folder) => folder.name !== "custom-documents"),
   ].filter((i) => !!i);
 
-  // Save to cache file
-  try {
-    fs.writeFileSync(CACHE_FILE, JSON.stringify(directory, null, 2), 'utf8');
-    console.log('💾 Directory structure saved to cache');
-  } catch (error) {
-    console.error('❌ Error saving cache file:', error.message);
-  }
+  // // Save to cache file
+  // try {
+  //   console.log('[SERVER MEMORY] Before writing cache file:', process.memoryUsage());
+  //   fs.writeFileSync(CACHE_FILE, JSON.stringify(directory, null, 2), 'utf8');
+  //   console.log('[SERVER MEMORY] After writing cache file:', process.memoryUsage());
+  //   console.log('💾 Directory structure saved to cache');
+  // } catch (error) {
+  //   console.error('❌ Error saving cache file:', error.message);
+  // }
+
+  // Legacy full-directory save is disabled; per-folder data is used instead.
+  console.log('[SERVER MEMORY] viewLocalFiles END:', process.memoryUsage());
 
   return directory;
   } catch (error) {
@@ -251,6 +438,35 @@ async function purgeSourceDocument(filename = null) {
 
   console.log(`Purging source document of ${filename}.`);
   fs.rmSync(filePath);
+
+  // Also remove metadata and folder index from Redis if available
+  try {
+    const { redisHelper, REDIS_KEYS, redis } = require("./redis");
+    const folderName = path.dirname(filename);
+    const fileName = path.basename(filename);
+    // Remove per-file metadata key
+    try {
+      await redis.del(REDIS_KEYS.FILE_METADATA + `${folderName}:${fileName}`);
+    } catch (e) {
+      // If redis.del isn't available or fails, try using helper methods
+      try {
+        if (redisHelper && typeof redisHelper.removeFileFromFolder === 'function') {
+          await redisHelper.removeFileFromFolder(folderName, fileName);
+        }
+      } catch (err) {}
+    }
+
+    // Ensure folder index is updated
+    try {
+      if (redisHelper && typeof redisHelper.removeFileFromFolder === 'function') {
+        await redisHelper.removeFileFromFolder(folderName, fileName);
+      }
+    } catch (err) {
+      console.warn('Failed to update Redis folder index during purge:', err.message || err);
+    }
+  } catch (err) {
+    // Redis not available or other error - ignore
+  }
   return;
 }
 
@@ -318,6 +534,83 @@ function normalizePath(filepath = "") {
     .trim();
   if (["..", ".", "/"].includes(result)) throw new Error("Invalid path.");
   return result;
+}
+
+// Ensure folder cache dir exists and provide helpers to save/load per-folder caches.
+function ensureFolderCacheDir() {
+  try {
+    if (!fs.existsSync(FOLDER_CACHE_DIR)) fs.mkdirSync(FOLDER_CACHE_DIR, { recursive: true });
+  } catch (err) {
+    console.warn('Could not ensure folder cache dir:', err && err.message ? err.message : err);
+  }
+}
+
+function folderCachePath(folderName = '') {
+  ensureFolderCacheDir();
+  // sanitize folderName to avoid path traversal
+  const safeName = folderName.replace(/[^a-zA-Z0-9-_\.]/g, '_');
+  return path.join(FOLDER_CACHE_DIR, `${safeName}.json`);
+}
+
+function saveFolderCache(folderName = '', subdocs = null) {
+  if (!folderName || !subdocs) return;
+  try {
+    const filePath = folderCachePath(folderName);
+    // Strip large fields just in case
+    const cleaned = {
+      name: subdocs.name,
+      type: subdocs.type,
+      items: (subdocs.items || []).map((it) => {
+        const copy = { ...it };
+        delete copy.pageContent;
+        delete copy.imageBase64;
+        try {
+          const target = path.resolve(documentsPath, folderName, copy.name);
+          if (fs.existsSync(target)) {
+            const s = fs.statSync(target);
+            copy.mtimeMs = s.mtimeMs;
+            copy.size = s.size;
+          }
+        } catch (e) {}
+        return copy;
+      }),
+    };
+    fs.writeFileSync(filePath, JSON.stringify(cleaned, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('Failed to write folder cache for', folderName, err && err.message ? err.message : err);
+  }
+}
+
+function loadFolderCache(folderName = '') {
+  if (!folderName) return null;
+  try {
+    const filePath = folderCachePath(folderName);
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    // Validate cache by verifying mtimes match actual files when available
+    if (!parsed || !parsed.items || !Array.isArray(parsed.items)) return null;
+    const results = [];
+    for (const item of parsed.items) {
+      try {
+        const target = path.resolve(documentsPath, folderName, item.name);
+        if (!fs.existsSync(target)) continue; // skip missing files
+        const stat = fs.statSync(target);
+        // if the cached item has mtimeMs and it differs a lot, skip this item
+        if (item.mtimeMs && Math.abs(item.mtimeMs - stat.mtimeMs) > 2000) continue;
+        // update size/mtime from disk to be safe
+        const copy = { ...item, mtimeMs: stat.mtimeMs, size: stat.size };
+        results.push(copy);
+      } catch (e) {
+        continue;
+      }
+    }
+    if (!results.length) return null;
+    return { name: parsed.name, type: parsed.type, items: results };
+  } catch (err) {
+    console.warn('Failed to load folder cache for', folderName, err && err.message ? err.message : err);
+    return null;
+  }
 }
 
 // Check if the vector-cache folder is empty or not
@@ -409,6 +702,50 @@ function purgeEntireVectorCache() {
  */
 const FILE_READ_SIZE_THRESHOLD = 150 * (1024 * 1024);
 
+// Default concurrency for resync file processing (can be tuned via env RESYNC_CONCURRENCY)
+const RESYNC_CONCURRENCY = parseInt(process.env.RESYNC_CONCURRENCY || "8");
+
+// Threshold (ms) to consider a single file processing "slow" and emit detailed timings
+const RESYNC_SLOW_MS = parseInt(process.env.RESYNC_SLOW_MS || "2000");
+// Concurrency for processing large files (>= FILE_READ_SIZE_THRESHOLD). Tune via RESYNC_LARGE_CONCURRENCY.
+const RESYNC_LARGE_CONCURRENCY = parseInt(process.env.RESYNC_LARGE_CONCURRENCY || "2");
+
+// Run async task functions with a concurrency limit and optional progress callback
+async function runWithConcurrency(taskFns = [], limit = 8, onProgress = null) {
+  return new Promise((resolve, reject) => {
+    let i = 0;
+    let running = 0;
+    let completed = 0;
+    const results = new Array(taskFns.length);
+
+    function runNext() {
+      if (completed === taskFns.length) return resolve(results);
+      while (running < limit && i < taskFns.length) {
+        const idx = i++;
+        running++;
+        taskFns[idx]()
+          .then((res) => {
+            results[idx] = res;
+          })
+          .catch((err) => {
+            results[idx] = null;
+            console.error('Error in resync task:', err && err.message ? err.message : err);
+          })
+          .finally(() => {
+            running--;
+            completed++;
+            if (typeof onProgress === 'function') {
+              try { onProgress(completed, taskFns.length); } catch (e) {}
+            }
+            runNext();
+          });
+      }
+    }
+
+    runNext();
+  });
+}
+
 /**
  * Converts a file to picker data
  * @param {string} pathToFile - The path to the file to convert
@@ -422,6 +759,7 @@ async function fileToPickerData({
 }) {
   let metadata = {};
   const filename = path.basename(pathToFile);
+  const tStart = process.hrtime();
   const fileStats = fs.statSync(pathToFile);
   const cachedStatus = await cachedVectorInformation(cachefilename, true);
 
@@ -437,6 +775,11 @@ async function fileToPickerData({
       return null;
     }
 
+    const tElapsed = process.hrtime(tStart);
+    if (process.env.DEBUG_RESYNC === 'true') {
+      console.log(`[RESYNC] fileToPickerData ${filename} size=${fileStats.size} took ${tElapsed[0]}s ${Math.round(tElapsed[1]/1e6)}ms`);
+    }
+
     return {
       name: filename,
       type: "file",
@@ -445,8 +788,6 @@ async function fileToPickerData({
       canWatch: liveSyncAvailable
         ? DocumentSyncQueue.canWatch(metadata)
         : false,
-      // pinnedWorkspaces: [], // This is the list of workspaceIds that have pinned this document
-      // watched: false, // boolean to indicate if this document is watched in ANY workspace
     };
   }
 
@@ -484,7 +825,7 @@ async function fileToPickerData({
 
   // If the metadata is empty or something went wrong, return null
   if (!metadata || !Object.keys(metadata)?.length) {
-    console.log(`Stream-parsing failed for ${path.basename(pathToFile)}`);
+    if (process.env.DEBUG_RESYNC === 'true') console.log(`Stream-parsing failed for ${path.basename(pathToFile)}`);
     return null;
   }
 
@@ -531,34 +872,71 @@ function hasRequiredMetadata(metadata = {}) {
  * @returns {Promise<object|null>} - The processed file object or null if processing failed
  */
 async function processSingleFile(folderPath, folderName, fileName, liveSyncAvailable) {
+  const filePath = path.join(folderPath, fileName);
+  const cacheFilename = `${folderName}/${fileName}`;
+  const timings = {};
+  const start = process.hrtime();
   try {
-    const filePath = path.join(folderPath, fileName);
-    const cacheFilename = `${folderName}/${fileName}`;
-    
-    const [rawData, cached] = await Promise.all([
-      fs.promises.readFile(filePath, "utf8"),
-      cachedVectorInformation(cacheFilename, true)
-    ]);
+    // stat
+    const tStatStart = process.hrtime();
+    let stat = null;
+    try { stat = await fs.promises.stat(filePath); } catch (e) {}
+    const tStat = process.hrtime(tStatStart);
+    timings.statMs = Math.round(tStat[0] * 1000 + tStat[1] / 1e6);
 
+    // read
+    const tReadStart = process.hrtime();
+    const rawData = await fs.promises.readFile(filePath, "utf8");
+    const tRead = process.hrtime(tReadStart);
+    timings.readMs = Math.round(tRead[0] * 1000 + tRead[1] / 1e6);
+
+    // cached lookup
+    const tCachedStart = process.hrtime();
+    const cached = await cachedVectorInformation(cacheFilename, true);
+    const tCached = process.hrtime(tCachedStart);
+    timings.cachedMs = Math.round(tCached[0] * 1000 + tCached[1] / 1e6);
+
+    // parse
+    const tParseStart = process.hrtime();
     let metadata;
     try {
       const parsed = JSON.parse(rawData);
-      const { pageContent, ...rest } = parsed;
+      // Remove large fields that are not needed for the picker UI
+      const { pageContent, imageBase64, ...rest } = parsed;
       metadata = rest;
+      // Explicitly null out the parsed object to help GC
+      parsed.pageContent = null;
+      parsed.imageBase64 = null;
     } catch (parseError) {
+      const tParse = process.hrtime(tParseStart);
+      timings.parseMs = Math.round(tParse[0] * 1000 + tParse[1] / 1e6);
       console.error(`JSON parse error for ${fileName}:`, parseError);
       return null;
     }
+    const tParse = process.hrtime(tParseStart);
+    timings.parseMs = Math.round(tParse[0] * 1000 + tParse[1] / 1e6);
 
-    const result = {
+    // canWatch
+    const tCanWatchStart = process.hrtime();
+    const canWatch = liveSyncAvailable ? DocumentSyncQueue.canWatch(metadata) : false;
+    const tCanWatch = process.hrtime(tCanWatchStart);
+    timings.canWatchMs = Math.round(tCanWatch[0] * 1000 + tCanWatch[1] / 1e6);
+
+    const total = process.hrtime(start);
+    const totalMs = Math.round(total[0] * 1000 + total[1] / 1e6);
+
+    // Emit detailed timing if DEBUG_RESYNC or file processing exceeded threshold
+    if (process.env.DEBUG_RESYNC === 'true' || totalMs >= RESYNC_SLOW_MS) {
+      console.log(`${new Date().toISOString()} [RESYNC] slow-file ${cacheFilename} size=${stat && stat.size ? stat.size : 'unknown'} totalMs=${totalMs} timings=${JSON.stringify(timings)}`);
+    }
+
+    return {
       name: fileName,
       type: "file",
       ...metadata,
       cached,
-      canWatch: liveSyncAvailable ? DocumentSyncQueue.canWatch(metadata) : false,
+      canWatch,
     };
-
-    return result;
   } catch (err) {
     console.error(`Error processing ${fileName}:`, err);
     return null;
@@ -677,6 +1055,224 @@ async function viewRedisFiles(filePaths = []) {
   }
 }
 
+/**
+ * Batch-based incremental resync with progress tracking
+ * @param {ResyncSession} session - Active resync session
+ * @returns {Promise<Object>} - Final directory structure
+ */
+async function incrementalResync(session) {
+  try {
+    session.status = 'running';
+    session.emit('started', session.getStatus());
+
+    if (!fs.existsSync(documentsPath)) fs.mkdirSync(documentsPath, { recursive: true });
+    
+    const directory = {
+      name: "documents",
+      type: "folder",
+      items: [],
+    };
+
+    // Get folders to process
+    let folders = fs.readdirSync(documentsPath).filter((f) => {
+      if (path.extname(f) === ".md") return false;
+      const folderPath = path.resolve(documentsPath, f);
+      return fs.existsSync(folderPath) && fs.lstatSync(folderPath).isDirectory();
+    });
+
+    // Apply folder filter if specified
+    if (session.folderFilter && Array.isArray(session.folderFilter)) {
+      folders = folders.filter(f => session.folderFilter.includes(f));
+    }
+
+    session.folders = folders;
+
+    // Count total files (only if not already counted - for resume support)
+    const perFolderFiles = {};
+    if (session.totalFiles === 0) {
+      for (const folderName of folders) {
+        const folderPath = path.resolve(documentsPath, folderName);
+        try {
+          const subfiles = fs.readdirSync(folderPath).filter((sf) => path.extname(sf) === ".json");
+          perFolderFiles[folderName] = subfiles;
+          session.totalFiles += subfiles.length;
+        } catch (err) {
+          perFolderFiles[folderName] = [];
+        }
+      }
+    } else {
+      // Already counted (resume case) - just rebuild the file list
+      for (const folderName of folders) {
+        const folderPath = path.resolve(documentsPath, folderName);
+        try {
+          const subfiles = fs.readdirSync(folderPath).filter((sf) => path.extname(sf) === ".json");
+          perFolderFiles[folderName] = subfiles;
+        } catch (err) {
+          perFolderFiles[folderName] = [];
+        }
+      }
+    }
+
+    session.totalBatches = Math.ceil(session.totalFiles / session.batchSize);
+    session.emit('progress', session.getStatus());
+
+    const liveSyncAvailable = await DocumentSyncQueue.enabled();
+    let { redisHelper } = require('./redis');
+
+    // Process each folder
+    for (const folderName of folders) {
+      if (session.shouldCancel) {
+        session.status = 'cancelled';
+        session.endTime = Date.now();
+        session.emit('cancelled', session.getStatus());
+        return directory;
+      }
+
+      if (session.shouldPause) {
+        session.status = 'paused';
+        session.emit('paused', session.getStatus());
+        return directory;
+      }
+
+      // Skip folders that were already completed (for resume)
+      if (session.completedFolders.has(folderName)) {
+        console.log(`[RESUME] Skipping already completed folder: ${folderName}`);
+        continue;
+      }
+
+      // Only reset progress if switching to a new folder
+      if (session.currentFolder !== folderName) {
+        session.currentFolder = folderName;
+        session.currentFolderProgress = 0;
+      }
+      
+      const folderPath = path.resolve(documentsPath, folderName);
+      
+      // Load existing cache data when resuming to avoid re-accumulating data
+      let subdocs;
+      if (session.currentFolderProgress > 0) {
+        // Resuming - load existing data from cache
+        const cachedData = await redisHelper.getFolderData(folderName);
+        subdocs = cachedData || { name: folderName, type: "folder", items: [] };
+        console.log(`[RESUME] Loaded ${subdocs.items.length} existing items for ${folderName}`);
+      } else {
+        // Starting fresh for this folder
+        subdocs = { name: folderName, type: "folder", items: [] };
+      }
+      
+      const subfiles = perFolderFiles[folderName] || [];
+
+      if (subfiles.length === 0) {
+        directory.items.push(subdocs);
+        session.completedFolders.add(folderName);
+        continue;
+      }
+
+      // Process files in batches
+      for (let i = session.currentFolderProgress; i < subfiles.length; i += session.batchSize) {
+        if (session.shouldCancel) break;
+        if (session.shouldPause) {
+          session.status = 'paused';
+          session.emit('paused', session.getStatus());
+          return directory; // Return current progress
+        }
+
+        session.currentBatch++;
+        const batch = subfiles.slice(i, i + session.batchSize);
+        const batchStartTime = Date.now();
+
+        // On resume, check which files in this batch are already in cache
+        const existingFileNames = new Set(subdocs.items.map(item => item.name));
+        const filesToProcess = batch.filter(fileName => {
+          const baseName = path.basename(fileName, '.json');
+          return !existingFileNames.has(baseName);
+        });
+
+        if (filesToProcess.length === 0) {
+          console.log(`[RESUME] Batch ${session.currentBatch}: All files already cached, skipping`);
+          session.currentFolderProgress = i + session.batchSize;
+          continue;
+        }
+
+        // Process batch (only new files)
+        const taskFns = filesToProcess.map(fileName => async () => {
+          const fileStartTime = Date.now();
+          session.currentFile = fileName;
+          const result = await processSingleFile(folderPath, folderName, fileName, liveSyncAvailable);
+          const fileTime = Date.now() - fileStartTime;
+          if (result) session.addProcessedFile(fileName, fileTime);
+          return result;
+        });
+
+        const results = await runWithConcurrency(taskFns, RESYNC_CONCURRENCY);
+        const validResults = results.filter(Boolean).filter(i => hasRequiredMetadata(i));
+        subdocs.items.push(...validResults);
+
+        // Attach pinned/watched info for this batch
+        const filenames = {};
+        validResults.forEach(item => { filenames[`${folderName}/${item.name}`] = item.name; });
+        const pinned = await getPinnedWorkspacesByDocument(filenames);
+        const watched = await getWatchedDocumentFilenames(filenames);
+        for (const item of validResults) {
+          item.pinnedWorkspaces = pinned[item.name] || [];
+          item.watched = watched.hasOwnProperty(item.name) || false;
+        }
+
+        // Save incremental cache after each batch (both Redis and disk)
+        try {
+          const itemCount = subdocs.items.length;
+          // Always save to Redis to keep it in sync
+          await redisHelper.saveFolderData(folderName, subdocs);
+          console.log(`[CACHE] Saved ${itemCount} items to Redis for '${folderName}'`);
+          // Also save to disk as backup
+          saveFolderCache(folderName, subdocs);
+        } catch (err) {
+          // If Redis fails, still save to disk
+          console.warn(`Failed to save cache for ${folderName} to Redis (${err.message}), saving to disk only`);
+          try {
+            saveFolderCache(folderName, subdocs);
+          } catch (diskErr) {
+            console.error(`Failed to save cache to disk for ${folderName}:`, diskErr.message);
+          }
+        }
+
+        // Emit batch completion event
+        const batchTime = Date.now() - batchStartTime;
+        session.emit('batchComplete', {
+          sessionId: session.sessionId,
+          batchNumber: session.currentBatch,
+          totalBatches: session.totalBatches,
+          folder: folderName,
+          filesInBatch: validResults.map(f => f.name),
+          batchTime,
+          ...session.getStatus()
+        });
+
+        session.updateProgress({ currentFile: null });
+        session.currentFolderProgress = i + session.batchSize; // Track progress within folder
+      }
+
+      // Mark folder as completed
+      session.completedFolders.add(folderName);
+      session.currentFolderProgress = 0;
+      directory.items.push(subdocs);
+    }
+
+    // Sort folders (custom-documents first)
+    directory.items = [
+      directory.items.find((folder) => folder.name === "custom-documents"),
+      ...directory.items.filter((folder) => folder.name !== "custom-documents"),
+    ].filter((i) => !!i);
+
+    session.complete();
+    return directory;
+
+  } catch (error) {
+    session.fail(error);
+    throw error;
+  }
+}
+
 module.exports = {
   findDocumentInDocuments,
   cachedVectorInformation,
@@ -694,4 +1290,76 @@ module.exports = {
   getDocumentsByFolder,
   hotdirPath,
   viewRedisFiles,
+  incrementalResync,
+  saveFolderCache,
 };
+
+// Preload per-folder caches into Redis on startup (best-effort, non-blocking)
+async function preloadFolderCaches() {
+  try {
+    ensureFolderCacheDir();
+    const folders = fs.existsSync(documentsPath) ? fs.readdirSync(documentsPath).filter((f) => fs.lstatSync(path.join(documentsPath, f)).isDirectory()) : [];
+    if (!folders.length) return;
+    let redisHelper = null;
+    try { ({ redisHelper } = require('./redis')); } catch (e) { /* no redis */ }
+    for (const folder of folders) {
+      try {
+        const cached = loadFolderCache(folder);
+        if (cached) {
+          if (redisHelper && typeof redisHelper.saveFolderData === 'function') {
+            try { await redisHelper.saveFolderData(folder, cached); console.log(`[PRELOAD] saved folder '${folder}' to Redis from disk cache`); } catch (e) {}
+          }
+        }
+      } catch (err) {
+        // ignore individual failures
+      }
+    }
+    console.log('[PRELOAD] Completed loading per-folder caches (best-effort)');
+  } catch (err) {
+    console.warn('Failed to preload folder caches:', err && err.message ? err.message : err);
+  }
+}
+
+// Refresh a single folder: scan it, build subdocs, save to Redis and disk, return subdocs
+async function refreshFolderCache(folderName = '') {
+  if (!folderName) throw new Error('folderName required');
+  const folderPath = path.resolve(documentsPath, normalizePath(folderName));
+  if (!fs.existsSync(folderPath) || !fs.lstatSync(folderPath).isDirectory()) throw new Error('Folder does not exist');
+  const subdocs = { name: folderName, type: 'folder', items: [] };
+  const subfiles = fs.readdirSync(folderPath).filter((f) => path.extname(f) === '.json');
+  if (!subfiles.length) return subdocs;
+  const liveSyncAvailableForFolder = await DocumentSyncQueue.enabled();
+  const smallTaskFns = [];
+  const largeTaskFns = [];
+  for (const subfile of subfiles) {
+    const fullPath = path.join(folderPath, subfile);
+    let stat = null;
+    try { stat = fs.statSync(fullPath); } catch (e) {}
+    const isLarge = stat && stat.size >= FILE_READ_SIZE_THRESHOLD;
+    const task = () => fileToPickerData({ pathToFile: fullPath, liveSyncAvailable: liveSyncAvailableForFolder, cachefilename: `${folderName}/${subfile}` });
+    if (isLarge) largeTaskFns.push(task); else smallTaskFns.push(task);
+  }
+  const smallResults = (smallTaskFns.length > 0) ? await runWithConcurrency(smallTaskFns, RESYNC_CONCURRENCY) : [];
+  const largeResults = (largeTaskFns.length > 0) ? await runWithConcurrency(largeTaskFns, RESYNC_LARGE_CONCURRENCY) : [];
+  const results = [...smallResults, ...largeResults].filter(Boolean).filter(i => hasRequiredMetadata(i));
+  subdocs.items.push(...results);
+  // attach pinned/watched
+  const filenames = {};
+  results.forEach(item => { filenames[`${folderName}/${item.name}`] = item.name; });
+  const pinned = await getPinnedWorkspacesByDocument(filenames);
+  const watched = await getWatchedDocumentFilenames(filenames);
+  for (const item of subdocs.items) {
+    item.pinnedWorkspaces = pinned[item.name] || [];
+    item.watched = watched.hasOwnProperty(item.name) || false;
+  }
+  // save to redis and disk
+  try { const { redisHelper } = require('./redis'); if (redisHelper && typeof redisHelper.saveFolderData === 'function') await redisHelper.saveFolderData(folderName, subdocs); } catch (e) {}
+  try { saveFolderCache(folderName, subdocs); } catch (e) {}
+  return subdocs;
+}
+
+// Start preload without blocking module load
+setImmediate(() => { preloadFolderCaches().catch(() => {}); });
+
+module.exports.preloadFolderCaches = preloadFolderCaches;
+module.exports.refreshFolderCache = refreshFolderCache;

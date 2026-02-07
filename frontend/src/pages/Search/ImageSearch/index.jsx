@@ -38,6 +38,27 @@ export default function ImageSearch() {
 
   const [searchDistance, setSearchDistance] = useState(DISTANCE.EUCLIDEAN);
 
+  // Search control state
+  const [maxResults, setMaxResults] = useState(100);
+  const [threshold, setThreshold] = useState(0.5);
+  const prevDistanceRef = useRef(DISTANCE.EUCLIDEAN);
+
+  // Auto-adjust threshold ONLY when distance metric actually changes
+  useEffect(() => {
+    // Only adjust if the distance metric actually changed
+    if (searchDistance !== prevDistanceRef.current) {
+      prevDistanceRef.current = searchDistance;
+      
+      if (searchDistance === DISTANCE.COSINE) {
+        setThreshold(0.2);
+      } else if (searchDistance === DISTANCE.EUCLIDEAN) {
+        setThreshold(2.0);
+      } else if (searchDistance === DISTANCE.DOT) {
+        setThreshold(0.5);
+      }
+    }
+  }, [searchDistance, DISTANCE]);
+
   // Fetch workspaces on mount
   useEffect(() => {
     const fetchWorkspaces = async () => {
@@ -273,12 +294,14 @@ export default function ImageSearch() {
             searchId: currentSearchId,
             distanceMetric: searchDistance,
             headers: headers,
+            maxResults: maxResults,
+            threshold: threshold,
             namespaces:
               selectedWorkspaces.length > 0
                 ? selectedWorkspaces.map((ws) => ({
                     name: ws.name,
-                    threshold: ws.similarityThreshold,
-                    limit: ws.topN,
+                    threshold: threshold, // Use dynamic threshold
+                    limit: maxResults, // Use dynamic max results
                   }))
                 : undefined,
           });
@@ -288,7 +311,7 @@ export default function ImageSearch() {
         }
       }
     },
-    [checkedWorkspaces, workspaces, searchDistance, searchId]
+    [checkedWorkspaces, workspaces, searchDistance, searchId, maxResults, threshold]
   );
 
   // Calculate paginated images
@@ -381,6 +404,10 @@ export default function ImageSearch() {
             searchDistance={searchDistance}
             setSearchDistance={setSearchDistance}
             distanceOptions={DISTANCE}
+            maxResults={maxResults}
+            setMaxResults={setMaxResults}
+            threshold={threshold}
+            setThreshold={setThreshold}
           />
 
           {ready === false && (

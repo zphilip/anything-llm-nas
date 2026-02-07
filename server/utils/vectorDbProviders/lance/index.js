@@ -189,13 +189,42 @@ const LanceDb = {
       scores: [],
     };
 
+    // Cap the limit to prevent LanceDB Arrow overflow errors
+    const queryLimit = Math.min(topN, 200);
+
     const response = await collection
       .vectorSearch(queryVector)
       .distanceType("cosine")
-      .limit(topN)
+      .limit(queryLimit)
       .toArray();
 
-    response.forEach((item, index) => {
+    console.log(`[MEMORY] Fetched ${response.length} cosine similarity results from LanceDB`);
+    
+    // CRITICAL: Strip base64 data IMMEDIATELY to prevent OOM
+    let totalBase64Stripped = 0;
+    const cleanedResponse = response.map((item) => {
+      const cleaned = { ...item };
+      
+      if (cleaned.pageContent && typeof cleaned.pageContent === 'string' && cleaned.pageContent.length > 10000) {
+        const originalSize = cleaned.pageContent.length;
+        cleaned.pageContent = `[Image data stripped - ${(originalSize / 1024).toFixed(0)}KB]`;
+        totalBase64Stripped += originalSize;
+      }
+      
+      // Remove imageBase64 field entirely - not used for display
+      if (cleaned.imageBase64 && typeof cleaned.imageBase64 === 'string') {
+        totalBase64Stripped += cleaned.imageBase64.length;
+        delete cleaned.imageBase64;
+      }
+      
+      return cleaned;
+    });
+    
+    if (totalBase64Stripped > 0) {
+      console.log(`[MEMORY] Stripped ${(totalBase64Stripped / 1024 / 1024).toFixed(2)}MB of base64 data`);
+    }
+
+    cleanedResponse.forEach((item, index) => {
       const similarity = this.distanceToSimilarity(item._distance);
       if (index < 5) {
         console.log(`  [Result ${index}] Distance: ${item._distance}, Similarity: ${similarity}`);
@@ -274,6 +303,114 @@ const LanceDb = {
    * @param {string[]} filterIdentifiers
    * @returns
    */
+  /**
+   * Performs a Dot Product Search on a given LanceDB namespace.
+   * For normalized vectors, dot product ranges from -1 to 1, where higher = more similar.
+   * @param {LanceClient} client
+   * @param {string} namespace
+   * @param {number[]} queryVector
+   * @param {number} dotProductThreshold - Minimum dot product score (higher = more similar)
+   * @param {number} topN
+   * @param {string[]} filterIdentifiers
+   * @returns
+   */
+  dotProductResponse: async function (
+    client,
+    namespace,
+    queryVector,
+    dotProductThreshold = 0.5,
+    topN = 4,
+    filterIdentifiers = []
+  ) {
+    const collection = await client.openTable(namespace);
+    const result = {
+      contextTexts: [],
+      sourceDocuments: [],
+      scores: [],
+    };
+
+    // Cap the limit to prevent LanceDB Arrow overflow errors
+    // Tests show overflow occurs around 400, so cap at 200 to be safe
+    const queryLimit = Math.min(topN * 2, 200);
+
+    const response = await collection
+      .vectorSearch(queryVector)
+      .distanceType("dot")
+      .limit(queryLimit)
+      .toArray();
+
+    console.log(`[MEMORY] Fetched ${response.length} dot product results from LanceDB`);
+    
+    // CRITICAL: Strip base64 data IMMEDIATELY to prevent OOM
+    let totalBase64Stripped = 0;
+    const cleanedResponse = response.map((item) => {
+      const cleaned = { ...item };
+      
+      if (cleaned.pageContent && typeof cleaned.pageContent === 'string' && cleaned.pageContent.length > 10000) {
+        const originalSize = cleaned.pageContent.length;
+        cleaned.pageContent = `[Image data stripped - ${(originalSize / 1024).toFixed(0)}KB]`;
+        totalBase64Stripped += originalSize;
+      }
+      
+      // Remove imageBase64 field entirely - not used for display
+      if (cleaned.imageBase64 && typeof cleaned.imageBase64 === 'string') {
+        totalBase64Stripped += cleaned.imageBase64.length;
+        delete cleaned.imageBase64;
+      }
+      
+      return cleaned;
+    });
+    
+    if (totalBase64Stripped > 0) {
+      console.log(`[MEMORY] Stripped ${(totalBase64Stripped / 1024 / 1024).toFixed(2)}MB of base64 data`);
+    }
+
+    console.log(`[DOT PRODUCT] Retrieved ${cleanedResponse.length} results`);
+
+    cleanedResponse.forEach((item, index) => {
+      // For dot product, _distance is actually the dot product score
+      // Higher values = more similar (range: -1 to 1 for normalized vectors)
+      const dotProductScore = item._distance;
+      
+      if (index < 5) {
+        console.log(`  [Result ${index}] Dot Product Score: ${dotProductScore.toFixed(6)}`);
+      }
+      
+      // Filter: keep items with score ABOVE threshold (higher = better)
+      if (dotProductScore < dotProductThreshold)
+        return;
+      
+      const { vector: _, ...rest } = item;
+      if (filterIdentifiers.includes(sourceIdentifier(rest))) {
+        console.log(
+          "LanceDB: A source was filtered from context as its parent document is pinned."
+        );
+        return;
+      }
+
+      result.contextTexts.push(rest.text);
+      result.sourceDocuments.push({
+        ...rest,
+        score: dotProductScore,
+      });
+      result.scores.push(dotProductScore);
+    });
+    console.log(`  Total results after filtering: ${result.contextTexts.length}`);
+
+    // Sort by dot product score (descending - higher scores are better)
+    const indices = result.scores
+      .map((score, index) => ({ score, index }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topN)
+      .map(item => item.index);
+    
+    return {
+      contextTexts: indices.map(i => result.contextTexts[i]),
+      sourceDocuments: indices.map(i => result.sourceDocuments[i]),
+      scores: indices.map(i => result.scores[i]),
+    };
+  },
+
   distanceResponse: async function (
     client,
     namespace,
@@ -301,16 +438,59 @@ const LanceDb = {
     console.log(`  - Max: ${Math.max(...queryVector).toFixed(6)}`);
     console.log(`  - First 10 values:`, queryVector.slice(0, 10));
 
+    // Cap the limit to prevent LanceDB Arrow overflow errors
+    // LanceDB has issues with very large limits (>300) causing "offset overflow"
+    const queryLimit = Math.min(topN * 2, 200);
+    console.log(`  - Query Limit: ${queryLimit} (topN=${topN})`);
+
     const response = await collection
       .vectorSearch(queryVector)
       .distanceType("l2")
-      .limit(topN * 2)
+      .limit(queryLimit)
       .toArray();
 
+    console.log(`[MEMORY] Fetched ${response.length} results from LanceDB`);
+    
+    // CRITICAL: Strip base64 data IMMEDIATELY to prevent OOM
+    // Each base64 image can be 1-5MB, so 200 images = 200MB-1GB in memory!
+    let totalBase64Stripped = 0;
+    const cleanedResponse = response.map((item, idx) => {
+      const cleaned = { ...item };
+      
+      // Strip base64 from pageContent field (used for images)
+      if (cleaned.pageContent && typeof cleaned.pageContent === 'string' && cleaned.pageContent.length > 10000) {
+        const originalSize = cleaned.pageContent.length;
+        cleaned.pageContent = `[Image data stripped - ${(originalSize / 1024).toFixed(0)}KB]`;
+        totalBase64Stripped += originalSize;
+      }
+      
+      // Remove imageBase64 field entirely - not used for display
+      if (cleaned.imageBase64 && typeof cleaned.imageBase64 === 'string') {
+        totalBase64Stripped += cleaned.imageBase64.length;
+        delete cleaned.imageBase64;
+      }
+      
+      return cleaned;
+    });
+    
+    console.log(`[MEMORY] Stripped ${(totalBase64Stripped / 1024 / 1024).toFixed(2)}MB of base64 data from ${response.length} results`);
+    console.log(`[MEMORY] Estimated memory saved: ${(totalBase64Stripped / 1024 / 1024).toFixed(2)}MB`);
+
     // DIAGNOSTIC: Check first stored vector if available
-    if (response.length > 0) {
+    if (cleanedResponse.length > 0) {
       console.log("[DIAGNOSTIC] First Result Keys:", Object.keys(response[0]));
-      console.log("[DIAGNOSTIC] First Result (partial):", JSON.stringify(response[0], null, 2).substring(0, 500));
+      // Create safe version for logging without base64 content
+      const safeResult = { ...response[0] };
+      if (safeResult.pageContent && safeResult.pageContent.length > 100) {
+        safeResult.pageContent = `[${safeResult.pageContent.length} chars]`;
+      }
+      if (safeResult.imageBase64 && safeResult.imageBase64.length > 100) {
+        safeResult.imageBase64 = `[${safeResult.imageBase64.length} chars]`;
+      }
+      if (safeResult.text && safeResult.text.length > 500) {
+        safeResult.text = safeResult.text.substring(0, 500) + '...';
+      }
+      console.log("[DIAGNOSTIC] First Result (safe):", JSON.stringify(safeResult, null, 2).substring(0, 1000));
       
       if (response[0].vector && Array.isArray(response[0].vector)) {
         const storedVector = response[0].vector;
@@ -334,11 +514,11 @@ const LanceDb = {
       }
     }
 
-    if (response.some(item => isNaN(item._distance))) {
+    if (cleanedResponse.some(item => isNaN(item._distance))) {
       console.warn("LanceDB returned NaN distances. Ensure your vectors are normalized.");
     }
 
-    response.forEach((item, index) => {
+    cleanedResponse.forEach((item, index) => {
       if (index < 5) {
         console.log(`  [Result ${index}] L2 Distance: ${item._distance}`);
       }
@@ -947,13 +1127,32 @@ const LanceDb = {
           embedderSettings.MultimodalEmbedderBasePath,
           embedderSettings.MultimodalEmbedderModelPref
         );
+        console.log("[SEARCH QUERY] ✓ Multimodal embedding successful, dimension:", queryVector?.length);
       } catch (error) {
-        console.warn("[SEARCH QUERY] Multimodal embedder failed, falling back to standard text embedder:", error.message);
-        queryVector = await LLMConnector.embedTextInput(input);
+        console.error("[SEARCH QUERY] ✖ Multimodal embedder failed:", error.message);
+        console.warn("[SEARCH QUERY] Falling back to standard text embedder...");
+        try {
+          queryVector = await LLMConnector.embedTextInput(input);
+          console.log("[SEARCH QUERY] ✓ Fallback embedding successful, dimension:", queryVector?.length);
+        } catch (fallbackError) {
+          console.error("[SEARCH QUERY] ✖ Fallback also failed:", fallbackError.message);
+          throw new Error(`Both embedders failed: ${error.message} / ${fallbackError.message}`);
+        }
       }
     } else {
       console.log("[SEARCH QUERY] Using standard text embedder");
-      queryVector = await LLMConnector.embedTextInput(input);
+      try {
+        queryVector = await LLMConnector.embedTextInput(input);
+        console.log("[SEARCH QUERY] ✓ Standard embedding successful, dimension:", queryVector?.length);
+      } catch (error) {
+        console.error("[SEARCH QUERY] ✖ Standard embedder failed:", error.message);
+        throw error;
+      }
+    }
+    
+    // Validate query vector
+    if (!queryVector || !Array.isArray(queryVector) || queryVector.length === 0) {
+      throw new Error(`Invalid query vector: ${typeof queryVector}, length: ${queryVector?.length}`);
     }
     
     console.log("[AnythingLLM DEBUG] performSimilaritySearch:");
@@ -963,29 +1162,168 @@ const LanceDb = {
     console.log("  - Query Vector (first 10):", queryVector.slice(0, 10));
     console.log("  - Similarity Threshold:", similarityThreshold);
     console.log("  - TopN:", topN);
-    const result = rerank
-      ? await this.rerankedSimilarityResponse({
-          client,
-          namespace,
-          query: input,
-          queryVector,
-          similarityThreshold,
-          topN,
-          filterIdentifiers,
-        })
-      : await this.similarityResponse({
-          client,
-          namespace,
-          queryVector,
-          similarityThreshold,
-          topN,
-          filterIdentifiers,
-        });
+    
+    let result;
+    try {
+      result = rerank
+        ? await this.rerankedSimilarityResponse({
+            client,
+            namespace,
+            query: input,
+            queryVector,
+            similarityThreshold,
+            topN,
+            filterIdentifiers,
+          })
+        : await this.similarityResponse({
+            client,
+            namespace,
+            queryVector,
+            similarityThreshold,
+            topN,
+            filterIdentifiers,
+          });
+      console.log("[AnythingLLM DEBUG] similarityResponse returned:", {
+        contextTextsCount: result?.contextTexts?.length,
+        sourceDocumentsCount: result?.sourceDocuments?.length
+      });
+    } catch (dbError) {
+      console.error("[AnythingLLM DEBUG] ✖ similarityResponse failed:", dbError.message);
+      console.error("[AnythingLLM DEBUG] Error details:", {
+        name: dbError.name,
+        code: dbError.code,
+        stack: dbError.stack
+      });
+      
+      if (dbError.message?.includes('dimension') || dbError.message?.includes('vector column')) {
+        throw new Error(`Vector dimension mismatch: Query has ${queryVector.length} dimensions. Collection may have different size. Recreate collection.`);
+      }
+      
+      throw dbError;
+    }
 
     const { contextTexts, sourceDocuments } = result;
     const sources = sourceDocuments.map((metadata, i) => {
       return { metadata: { ...metadata, text: contextTexts[i] } };
     });
+    return {
+      contextTexts,
+      sources: this.curateSources(sources),
+      message: false,
+    };
+  },
+
+  performDotProductSearch: async function ({
+    namespace = null,
+    input = "",
+    LLMConnector = null,
+    dotProductThreshold = 0.5,
+    topN = 4,
+    filterIdentifiers = [],
+  }) {
+    if (!namespace || !input || !LLMConnector)
+      throw new Error("Invalid request to performDotProductSearch.");
+
+    const { client } = await this.connect();
+    if (!(await this.namespaceExists(client, namespace))) {
+      return {
+        contextTexts: [],
+        sources: [],
+        message: "Invalid query - no documents found for workspace!",
+      };
+    }
+
+    // Check if Multimodal Embedder is configured
+    const { SystemSettings: SS } = require("../../../models/systemSettings");
+    const embedderSettings = await SS.multimodalEmbedderPreferenceKeys();
+    const hasMultimodalEmbedder = embedderSettings.MultimodalEmbedderProvider && 
+                                  embedderSettings.MultimodalEmbedderProvider !== 'none' && 
+                                  embedderSettings.MultimodalEmbedderBasePath &&
+                                  embedderSettings.MultimodalEmbedderBasePath.trim() !== '';
+    
+    let queryVector;
+    if (hasMultimodalEmbedder) {
+      console.log("[SEARCH QUERY DOT] Using Multimodal Embedder for text query");
+      try {
+        queryVector = await this.embedTextWithMultimodalEmbedder(
+          input,
+          embedderSettings.MultimodalEmbedderBasePath,
+          embedderSettings.MultimodalEmbedderModelPref
+        );
+        console.log("[SEARCH QUERY DOT] ✓ Multimodal embedding successful, dimension:", queryVector?.length);
+      } catch (error) {
+        console.error("[SEARCH QUERY DOT] ✖ Multimodal embedder failed:", error.message);
+        console.warn("[SEARCH QUERY DOT] Falling back to standard text embedder...");
+        try {
+          queryVector = await LLMConnector.embedTextInput(input);
+          console.log("[SEARCH QUERY DOT] ✓ Fallback embedding successful, dimension:", queryVector?.length);
+        } catch (fallbackError) {
+          console.error("[SEARCH QUERY DOT] ✖ Fallback also failed:", fallbackError.message);
+          throw new Error(`Both embedders failed: ${error.message} / ${fallbackError.message}`);
+        }
+      }
+    } else {
+      console.log("[SEARCH QUERY DOT] Using standard text embedder");
+      try {
+        queryVector = await LLMConnector.embedTextInput(input);
+        console.log("[SEARCH QUERY DOT] ✓ Standard embedding successful, dimension:", queryVector?.length);
+      } catch (error) {
+        console.error("[SEARCH QUERY DOT] ✖ Standard embedder failed:", error.message);
+        throw error;
+      }
+    }
+    
+    // Validate query vector
+    if (!queryVector || !Array.isArray(queryVector) || queryVector.length === 0) {
+      throw new Error(`Invalid query vector: ${typeof queryVector}, length: ${queryVector?.length}`);
+    }
+    
+    console.log("[AnythingLLM DEBUG] performDotProductSearch:");
+    console.log("  - Namespace:", namespace);
+    console.log("  - Search Input:", input);
+    console.log("  - Query Vector Dimension:", queryVector.length);
+    console.log("  - Dot Product Threshold:", dotProductThreshold);
+    console.log("  - TopN:", topN);
+    
+    let contextTexts, sourceDocuments;
+    try {
+      const result = await this.dotProductResponse(
+        client,
+        namespace,
+        queryVector,
+        dotProductThreshold,
+        topN,
+        filterIdentifiers
+      );
+      contextTexts = result.contextTexts;
+      sourceDocuments = result.sourceDocuments;
+      console.log("[AnythingLLM DEBUG] dotProductResponse returned:", {
+        contextTextsCount: contextTexts?.length,
+        sourceDocumentsCount: sourceDocuments?.length
+      });
+    } catch (dbError) {
+      console.error("[AnythingLLM DEBUG] ✖ dotProductResponse failed:", dbError.message);
+      console.error("[AnythingLLM DEBUG] Error details:", {
+        name: dbError.name,
+        code: dbError.code,
+        stack: dbError.stack
+      });
+      
+      if (dbError.message?.includes('dimension') || dbError.message?.includes('vector column')) {
+        throw new Error(`Vector dimension mismatch: Query has ${queryVector.length} dimensions. Collection may have different size. Recreate collection.`);
+      }
+      
+      throw dbError;
+    }
+
+    const sources = await Promise.all(sourceDocuments.map(async (metadata, i) => {
+      let text = contextTexts[i];
+      if (process.env.ENABLE_TRANSLATION === 'true' && LLMConnector.translateText) {
+        text = await LLMConnector.translateText(contextTexts[i], "english", "chinese");
+      }
+      return { metadata: { ...metadata, text } };
+    }));
+
     return {
       contextTexts,
       sources: this.curateSources(sources),
@@ -1024,6 +1362,10 @@ const LanceDb = {
     let queryVector;
     if (hasMultimodalEmbedder) {
       console.log("[SEARCH QUERY] Using Multimodal Embedder for text query (to match image embeddings)");
+      console.log("[SEARCH QUERY] Embedder settings:", {
+        basePath: embedderSettings.MultimodalEmbedderBasePath,
+        model: embedderSettings.MultimodalEmbedderModelPref
+      });
       try {
         // Use multimodal embedder for text-only query (no image_data)
         // This ensures query vectors match the dimension of stored image embeddings
@@ -1032,13 +1374,33 @@ const LanceDb = {
           embedderSettings.MultimodalEmbedderBasePath,
           embedderSettings.MultimodalEmbedderModelPref
         );
+        console.log("[SEARCH QUERY] ✓ Multimodal embedding successful, dimension:", queryVector?.length);
       } catch (error) {
-        console.warn("[SEARCH QUERY] Multimodal embedder failed, falling back to standard text embedder:", error.message);
-        queryVector = await LLMConnector.embedTextInput(input);
+        console.error("[SEARCH QUERY] ❌ Multimodal embedder FAILED:", error.message);
+        console.error("[SEARCH QUERY] Error stack:", error.stack);
+        console.warn("[SEARCH QUERY] Falling back to standard text embedder...");
+        try {
+          queryVector = await LLMConnector.embedTextInput(input);
+          console.log("[SEARCH QUERY] ✓ Fallback embedding successful, dimension:", queryVector?.length);
+        } catch (fallbackError) {
+          console.error("[SEARCH QUERY] ❌ FALLBACK ALSO FAILED:", fallbackError.message);
+          throw new Error(`Both multimodal and standard embedders failed: ${error.message} / ${fallbackError.message}`);
+        }
       }
     } else {
       console.log("[SEARCH QUERY] Using standard text embedder");
-      queryVector = await LLMConnector.embedTextInput(input);
+      try {
+        queryVector = await LLMConnector.embedTextInput(input);
+        console.log("[SEARCH QUERY] ✓ Standard embedding successful, dimension:", queryVector?.length);
+      } catch (error) {
+        console.error("[SEARCH QUERY] ❌ Standard embedder failed:", error.message);
+        throw error;
+      }
+    }
+    
+    // Validate query vector
+    if (!queryVector || !Array.isArray(queryVector) || queryVector.length === 0) {
+      throw new Error(`Invalid query vector generated: ${typeof queryVector}, length: ${queryVector?.length}`);
     }
     
     // Calculate query vector magnitude
@@ -1054,14 +1416,38 @@ const LanceDb = {
     console.log("  - Query Vector (first 10):", queryVector.slice(0, 10));
     console.log("  - Distance Threshold:", distanceThreshold);
     console.log("  - TopN:", topN);
-    const { contextTexts, sourceDocuments } = await this.distanceResponse(
-      client,
-      namespace,
-      queryVector,
-      distanceThreshold,
-      topN,
-      filterIdentifiers
-    );
+    
+    let contextTexts, sourceDocuments;
+    try {
+      const result = await this.distanceResponse(
+        client,
+        namespace,
+        queryVector,
+        distanceThreshold,
+        topN,
+        filterIdentifiers
+      );
+      contextTexts = result.contextTexts;
+      sourceDocuments = result.sourceDocuments;
+      console.log("[AnythingLLM DEBUG] distanceResponse returned:", {
+        contextTextsCount: contextTexts?.length,
+        sourceDocumentsCount: sourceDocuments?.length
+      });
+    } catch (dbError) {
+      console.error("[AnythingLLM DEBUG] ❌ distanceResponse failed:", dbError.message);
+      console.error("[AnythingLLM DEBUG] Error details:", {
+        name: dbError.name,
+        code: dbError.code,
+        stack: dbError.stack
+      });
+      
+      // Check if it's a dimension mismatch error
+      if (dbError.message?.includes('dimension') || dbError.message?.includes('vector column')) {
+        throw new Error(`Vector dimension mismatch: Query has ${queryVector.length} dimensions but collection expects different size. You may need to recreate the collection.`);
+      }
+      
+      throw dbError;
+    }
 
     const sources = await Promise.all(sourceDocuments.map(async (metadata, i) => {
       let text = contextTexts[i];
@@ -1182,8 +1568,10 @@ const LanceDb = {
       const { text, vector: _v, _distance: _d, ...rest } = source;
       const metadata = rest.hasOwnProperty("metadata") ? rest.metadata : rest;
       if (Object.keys(metadata).length > 0) {
+        // Remove large fields to prevent JSON serialization errors
+        const { pageContent, imageBase64, ...cleanMetadata } = metadata;
         documents.push({
-          ...metadata,
+          ...cleanMetadata,
           ...(text ? { text } : {}),
         });
       }

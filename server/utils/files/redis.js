@@ -31,6 +31,49 @@ redis.on('connect', () => {
 
 // Redis 辅助类
 class RedisHelper {
+
+    // Add a file entry to a folder in Redis (per-folder update)
+    async addFileToFolder(folderName, fileEntry) {
+      const key = REDIS_KEYS.FOLDER_DATA + folderName;
+      let folder = { name: folderName, type: 'folder', items: [] };
+      try {
+        const raw = await this.redis.get(key);
+        if (raw) {
+          folder = JSON.parse(raw);
+        }
+        // Remove any existing entry with the same name
+        folder.items = folder.items.filter(i => i.name !== fileEntry.name);
+        // Remove large fields if present
+        const sanitized = { ...fileEntry };
+        delete sanitized.pageContent;
+        delete sanitized.imageBase64;
+        folder.items.push(sanitized);
+        await this.redis.set(key, JSON.stringify(folder));
+        this.directoryChanged = true;
+        console.log(`Added/updated file '${fileEntry.name}' in folder '${folderName}' in Redis.`);
+      } catch (err) {
+        console.error(`Error adding file to folder '${folderName}':`, err);
+      }
+    }
+
+    // Remove a file entry from a folder in Redis (per-folder update)
+    async removeFileFromFolder(folderName, fileName) {
+      const key = REDIS_KEYS.FOLDER_DATA + folderName;
+      try {
+        const raw = await this.redis.get(key);
+        if (!raw) return;
+        let folder = JSON.parse(raw);
+        const before = folder.items.length;
+        folder.items = folder.items.filter(i => i.name !== fileName);
+        if (folder.items.length !== before) {
+          await this.redis.set(key, JSON.stringify(folder));
+          this.directoryChanged = true;
+          console.log(`Removed file '${fileName}' from folder '${folderName}' in Redis.`);
+        }
+      } catch (err) {
+        console.error(`Error removing file from folder '${folderName}':`, err);
+      }
+    }
   constructor(redisClient) {
     this.redis = redisClient;
     this.subscriber = new Redis({ 
@@ -58,17 +101,12 @@ class RedisHelper {
     
   // 目录数据操作
   async saveDirectoryData(data) {
+    // Deprecated: saving the full directory tree to a single Redis key
+    // Use per-folder keys (saveFolderData / addFileToFolder) instead.
     try {
-      // Check if directory data already exists
-      const existingData = await this.redis.get(REDIS_KEYS.DIRECTORY_DATA);
-      if (existingData) {
-        console.log('Directory data already exists.');
-      }
-      
-      await this.redis.set(REDIS_KEYS.DIRECTORY_DATA, JSON.stringify(data));
-      console.log('Saved directory data');
+      console.warn('saveDirectoryData is deprecated and will not save the full directory to Redis.');
     } catch (error) {
-      console.error('Error saving directory data to Redis:', error);
+      // noop
     }
   }
 
@@ -137,30 +175,15 @@ class RedisHelper {
    * Persist Redis data to the cache file
    */
   async saveRedisDataToFile() {
-    if (!this.directoryChanged) {
-        console.log("No changes detected in directory, skipping save.");
-        return; // Skip if no changes were made
+    // Disabled: legacy full-directory cache writes are deprecated.
+    // Persisting the entire directory into a single cache file causes large memory spikes
+    // and defeats the per-folder incremental approach. This operation is now a no-op.
+    if (this.directoryChanged) {
+      console.log('saveRedisDataToFile: changes detected but full-directory cache write is disabled.');
+      // Reset the flag to avoid repeated logs
+      this.directoryChanged = false;
     }
-
-    const directory = await this.getDirectoryData();
-    if (!directory || !directory.items) {
-        console.log("⚠️ Failed to retrieve directory data or items are missing.");
-        return;
-    }
-
-    const itemCountBefore = directory.items.length;
-    console.log(`📂 Directory contains ${itemCountBefore} items before saving.`);
-
-    fs.writeFileSync(this.CACHE_FILE, JSON.stringify(directory, null, 2));
-    console.log("💾 Directory data saved to cache file.");
-
-    // Reload the data to verify saving success
-    const savedData = JSON.parse(fs.readFileSync(this.CACHE_FILE, "utf-8"));
-    const itemCountAfter = savedData.items?.length ?? 0;
-    console.log(`✅ Cache file now contains ${itemCountAfter} items after saving.`);
-
-    // Reset the change flag after saving
-    this.directoryChanged = false;
+    return;
 }
 
 
@@ -212,17 +235,25 @@ class RedisHelper {
   async saveFolderData(folderName, data) {
     try {
       const key = REDIS_KEYS.FOLDER_DATA + folderName;
-
-      // Check if the folder data already exists
-      const existingData = await this.redis.get(key);
-      if (existingData) {
-        console.log(`Folder data for ${folderName} already exists. Skipping save.`);
-        return; // Skip saving if data already exists
-      }
-
-      // Save the folder data if it doesn't exist
-      await this.redis.set(key, JSON.stringify(data));
-      console.log(`Saved folder data for ${folderName}`);
+      
+      // OPTIMIZATION: Strip large fields before serializing to reduce memory spike
+      // Create a lightweight copy without pageContent/imageBase64
+      const sanitized = {
+        name: data.name,
+        type: data.type,
+        items: (data.items || []).map(item => {
+          if (item.type === 'file') {
+            // For files, create shallow copy and remove large fields
+            const { pageContent, imageBase64, ...rest } = item;
+            return rest;
+          }
+          return item; // Folders don't have these fields
+        })
+      };
+      
+      // Serialize the sanitized version (much smaller than original)
+      await this.redis.set(key, JSON.stringify(sanitized));
+      console.log(`Saved folder data for ${folderName} (overwritten)`);
     } catch (error) {
       console.error(`Error saving folder data for ${folderName} to Redis:`, error);
     }

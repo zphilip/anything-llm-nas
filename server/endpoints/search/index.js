@@ -61,7 +61,16 @@ function searchEndpoints(app) {
                     similarityThreshold: threshold,
                     topN: limit,
                   });
+                } else if (distanceMetric === 'dot') {
+                  vectorSearchResults = await VectorDb.performDotProductSearch({
+                    namespace: namespace.name.toLowerCase(),
+                    input: translatedSearch.toLowerCase(),
+                    LLMConnector,
+                    dotProductThreshold: threshold,
+                    topN: limit,
+                  });
                 } else {
+                  // Default to L2 distance
                   vectorSearchResults = await VectorDb.performDistanceSearch({
                     namespace: namespace.name.toLowerCase(),
                     input: translatedSearch.toLowerCase(),
@@ -97,7 +106,17 @@ function searchEndpoints(app) {
             console.log("[SEARCH ENDPOINT] Returning results:");
             console.log(`  Total sources: ${sources.length}`);
             if (sources.length > 0) {
-                console.log("  First result structure:", JSON.stringify(sources[0], null, 2));
+                // Create a safe version for logging without base64 content
+                const safeFirstResult = JSON.parse(JSON.stringify(sources[0]));
+                if (safeFirstResult.metadata) {
+                    if (safeFirstResult.metadata.pageContent) {
+                        safeFirstResult.metadata.pageContent = `[${safeFirstResult.metadata.pageContent.length} chars]`;
+                    }
+                    if (safeFirstResult.metadata.imageBase64) {
+                        safeFirstResult.metadata.imageBase64 = `[${safeFirstResult.metadata.imageBase64.length} chars]`;
+                    }
+                }
+                console.log("  First result structure:", JSON.stringify(safeFirstResult, null, 2));
                 console.log("  First result metadata keys:", Object.keys(sources[0]?.metadata || {}));
             }
 

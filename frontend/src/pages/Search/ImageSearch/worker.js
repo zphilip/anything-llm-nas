@@ -18,7 +18,7 @@ function simulateHeavyComputation() {
 
 // Listen for messages from main thread
 self.onmessage = async function(event) {
-  const { text, distanceMetric, headers, namespaces, searchId } = event.data;
+  const { text, distanceMetric, headers, namespaces, searchId, maxResults = 100, threshold: userThreshold } = event.data;
   
   // Perform some heavy computation (simulated)
   const sim_result = simulateHeavyComputation();
@@ -28,18 +28,25 @@ self.onmessage = async function(event) {
   // Send the output back to the main thread
   self.postMessage({ status: 'ready' });
   
-  // Search images with the provided namespaces
-  let threshold = 0.5; // default threshold
-  if (distanceMetric === DISTANCE.COSINE) {
-      threshold = 0.2;
-  } else if (distanceMetric === DISTANCE.EUCLIDEAN) {
-      threshold = 500;
+  // Use user-provided threshold, or fall back to defaults
+  let threshold = userThreshold;
+  if (threshold === undefined || threshold === null) {
+    // Fallback to defaults if not provided
+    if (distanceMetric === DISTANCE.COSINE) {
+        threshold = 0.2;
+    } else if (distanceMetric === DISTANCE.EUCLIDEAN) {
+        threshold = 2.0;
+    } else if (distanceMetric === DISTANCE.DOT) {
+        threshold = 0.5;
+    } else {
+        threshold = 0.5;
+    }
   }
   
   const result = await Search.searchText(
       text,
       namespaces,
-      200, // default limit
+      maxResults,
       threshold,
       distanceMetric,
       headers // Pass headers to searchText        

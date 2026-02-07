@@ -184,7 +184,60 @@ const Document = {
       },
       userId
     );
+
+    // Update Redis cache to reflect correct cached status for removed files
+    await this.updateCachedStatusInRedis(removals);
+
     return true;
+  },
+
+  // Update the cached status in Redis for removed documents
+  updateCachedStatusInRedis: async function (removals = []) {
+    if (removals.length === 0) return;
+
+    try {
+      const { redisHelper } = require("../utils/files/redis");
+      const { cachedVectorInformation } = require("../utils/files");
+      const path = require("path");
+
+      // Group removals by folder
+      const folderMap = {};
+      for (const docPath of removals) {
+        const folderName = path.dirname(docPath);
+        const fileName = path.basename(docPath);
+        if (!folderMap[folderName]) {
+          folderMap[folderName] = [];
+        }
+        folderMap[folderName].push({ fileName, docPath });
+      }
+
+      // Update each folder's cache
+      for (const [folderName, files] of Object.entries(folderMap)) {
+        const folderData = await redisHelper.getFolderData(folderName);
+        if (!folderData) continue;
+
+        // Update cached status for removed files
+        let updated = false;
+        for (const file of files) {
+          const item = folderData.items?.find(i => i.name === file.fileName);
+          if (item) {
+            const isCached = await cachedVectorInformation(file.docPath, true);
+            if (item.cached !== isCached) {
+              item.cached = isCached;
+              updated = true;
+            }
+          }
+        }
+
+        // Save updated folder data back to Redis
+        if (updated) {
+          await redisHelper.saveFolderData(folderName, folderData);
+          console.log(`Updated cached status for ${files.length} files in folder '${folderName}'`);
+        }
+      }
+    } catch (error) {
+      console.error("Error updating cached status in Redis:", error.message);
+    }
   },
 
   count: async function (clause = {}, limit = null) {

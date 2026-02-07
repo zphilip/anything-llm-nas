@@ -100,8 +100,11 @@ class CollectorApi {
       body: data,
       dispatcher: new Agent({ headersTimeout: 600000 }),
     })
-      .then((res) => {
-        if (!res.ok) throw new Error("Response could not be completed");
+      .then(async (res) => {
+        if (!res.ok) {
+          const errorText = await res.text().catch(() => 'Unknown error');
+          throw new Error(`[processDocument] Response failed with status ${res.status}: ${errorText}`);
+        }
         return res.json();
       })
       .then((res) => res)
@@ -140,8 +143,11 @@ class CollectorApi {
       },
       body: data,
     })
-      .then((res) => {
-        if (!res.ok) throw new Error("Response could not be completed");
+      .then(async (res) => {
+        if (!res.ok) {
+          const errorText = await res.text().catch(() => 'Unknown error');
+          throw new Error(`[processLink] Response failed with status ${res.status}: ${errorText}`);
+        }
         return res.json();
       })
       .then((res) => res)
@@ -175,8 +181,11 @@ class CollectorApi {
       },
       body: data,
     })
-      .then((res) => {
-        if (!res.ok) throw new Error("Response could not be completed");
+      .then(async (res) => {
+        if (!res.ok) {
+          const errorText = await res.text().catch(() => 'Unknown error');
+          throw new Error(`[processRawText] Response failed with status ${res.status}: ${errorText}`);
+        }
         return res.json();
       })
       .then((res) => res)
@@ -191,6 +200,11 @@ class CollectorApi {
   // on the document processor.
   async forwardExtensionRequest({ endpoint, method, body }) {
     const data = typeof body === "string" ? body : JSON.stringify(body);
+    console.log(`[CollectorApi] Forwarding to collector: ${method} ${endpoint}`);
+    if (endpoint.includes('processStatus')) {
+      console.log(`[CollectorApi] Request body:`, body);
+    }
+    
     return await fetch(`${this.endpoint}${endpoint}`, {
       method,
       body: data,
@@ -205,8 +219,13 @@ class CollectorApi {
       // substantially so that they do not show a failure to the user early.
       dispatcher: this.extensionRequestAgent,
     })
-      .then((res) => {
-        if (!res.ok) throw new Error("Response could not be completed");
+      .then(async (res) => {
+        if (!res.ok) {
+          const errorText = await res.text().catch(() => 'Unknown error');
+          console.log(`[CollectorApi] Request failed: ${method} ${endpoint} - Status ${res.status}`);
+          console.log(`[CollectorApi] Response body: ${errorText}`);
+          throw new Error(`[forwardExtensionRequest] Response failed with status ${res.status}: ${errorText}`);
+        }
         return res.json();
       })
       .then((res) => res)
@@ -242,8 +261,11 @@ class CollectorApi {
       },
       body: data,
     })
-      .then((res) => {
-        if (!res.ok) throw new Error("Response could not be completed");
+      .then(async (res) => {
+        if (!res.ok) {
+          const errorText = await res.text().catch(() => 'Unknown error');
+          throw new Error(`[getLinkContent] Response failed with status ${res.status}: ${errorText}`);
+        }
         return res.json();
       })
       .then((res) => res)
@@ -278,8 +300,11 @@ class CollectorApi {
       },
       body: data,
     })
-      .then((res) => {
-        if (!res.ok) throw new Error("Response could not be completed");
+      .then(async (res) => {
+        if (!res.ok) {
+          const errorText = await res.text().catch(() => 'Unknown error');
+          throw new Error(`[parseDocument] Response failed with status ${res.status}: ${errorText}`);
+        }
         return res.json();
       })
       .then((res) => res)

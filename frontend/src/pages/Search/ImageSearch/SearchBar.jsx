@@ -33,10 +33,35 @@ export function SearchBar({ search }) {
 }
 
 
-export function SearchBarOption({ search, searchDistance, setSearchDistance, distanceOptions }) {
+export function SearchBarOption({ 
+    search, 
+    searchDistance, 
+    setSearchDistance, 
+    distanceOptions,
+    maxResults,
+    setMaxResults,
+    threshold,
+    setThreshold
+}) {
     const [query, setQuery] = useState("");
     const [showDropdown, setShowDropdown] = useState(false);
     const dropdownRef = useRef(null);
+    
+    // Get threshold range based on distance metric
+    const getThresholdConfig = () => {
+        switch(searchDistance) {
+            case distanceOptions.COSINE:
+                return { min: 0, max: 1, step: 0.05, label: "Similarity", hint: "Higher = more similar" };
+            case distanceOptions.EUCLIDEAN:
+                return { min: 0, max: 2, step: 0.1, label: "Distance", hint: "Lower = more similar" };
+            case distanceOptions.DOT:
+                return { min: -1, max: 1, step: 0.1, label: "Dot Product", hint: "Higher = more similar" };
+            default:
+                return { min: 0, max: 1, step: 0.1, label: "Threshold", hint: "" };
+        }
+    };
+    
+    const thresholdConfig = getThresholdConfig();
     
     // Close dropdown when clicking outside
     useEffect(() => {
@@ -126,6 +151,50 @@ export function SearchBarOption({ search, searchDistance, setSearchDistance, dis
                 >
                     Change
                 </button>
+            </div>
+
+            {/* Search Controls */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                {/* Max Results Control */}
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Max Results: <span className="text-blue-600 dark:text-blue-400 font-bold">{maxResults}</span>
+                    </label>
+                    <input
+                        type="range"
+                        min="10"
+                        max="200"
+                        step="10"
+                        value={maxResults}
+                        onChange={(e) => setMaxResults(Number(e.target.value))}
+                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        <span>10</span>
+                        <span>200</span>
+                    </div>
+                </div>
+
+                {/* Threshold Control */}
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        {thresholdConfig.label} Threshold: <span className="text-blue-600 dark:text-blue-400 font-bold">{threshold.toFixed(2)}</span>
+                    </label>
+                    <input
+                        type="range"
+                        min={thresholdConfig.min}
+                        max={thresholdConfig.max}
+                        step={thresholdConfig.step}
+                        value={threshold}
+                        onChange={(e) => setThreshold(Number(e.target.value))}
+                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        <span>{thresholdConfig.min}</span>
+                        <span className="text-center italic">{thresholdConfig.hint}</span>
+                        <span>{thresholdConfig.max}</span>
+                    </div>
+                </div>
             </div>
         </div>
     );

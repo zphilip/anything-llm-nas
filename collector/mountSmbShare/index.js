@@ -353,31 +353,44 @@ const processBatchConcurrent = async (batch, smbSharePathFull, localSmbShareDir,
   const activeOperations = new Set();
 
   try {
-    const promises = batch.map(record => {
-      const operationPromise = limit(async () => {
-        try {
-          activeOperations.add(record.file_path);
-          
-          const result = await processSingleFile(
-            smbSharePathFull,
-            localSmbShareDir,
-            record,
-            credentials
-          );
+    console.log(`Processing batch with timeout of ${batchTimeout}ms...`);
+    
+    const processingPromise = (async () => {
+      const promises = batch.map(record => {
+        const operationPromise = limit(async () => {
+          try {
+            activeOperations.add(record.file_path);
+            
+            const result = await processSingleFile(
+              smbSharePathFull,
+              localSmbShareDir,
+              record,
+              credentials
+            );
 
-          activeOperations.delete(record.file_path);
-          return result;
-        } catch (error) {
-          activeOperations.delete(record.file_path);
-          console.error(`Error processing file ${record.file_path}:`, error);
-          return null;
-        }
+            activeOperations.delete(record.file_path);
+            return result;
+          } catch (error) {
+            activeOperations.delete(record.file_path);
+            console.error(`Error processing file ${record.file_path}:`, error);
+            return null;
+          }
+        });
+        return operationPromise;
       });
-      return operationPromise;
-    });
 
-    const results = await Promise.all(promises);
-    return results.filter(Boolean);
+      return await Promise.all(promises);
+    })();
+
+    // Race between processing and timeout
+    const results = await Promise.race([
+      processingPromise,
+      timeout(batchTimeout)
+    ]);
+    
+    const successfulResults = results.filter(Boolean);
+    console.log(`✅ Batch completed: ${successfulResults.length} files processed`);
+    return successfulResults;
 
   } catch (error) {
     console.error(`Batch processing error: ${error.message}`);
@@ -495,6 +508,9 @@ async function processFilesInBatches(processId, activeProcesses, unprocessedFile
   const batchSize = BATCH_SIZE;
   const totalFiles = unprocessedFiles.length;
   let processedDocs = [];
+  let totalProcessedCount = 0;
+  let failedBatches = [];
+  const totalBatches = Math.ceil(totalFiles / batchSize);
 
   // Import handleLocalFilesCache if available
   let handleLocalFilesCache;
@@ -506,42 +522,81 @@ async function processFilesInBatches(processId, activeProcesses, unprocessedFile
   }
 
   for (let i = 0; i < totalFiles; i += batchSize) {
+    const batchNumber = Math.floor(i / batchSize) + 1;
+    
+    // Check for user cancellation
     if (activeProcesses.get(processId).shouldStop) {
-      console.log(`Process ${processId} stopped.`);
+      console.log(`Process ${processId} stopped by user at batch ${batchNumber}/${totalBatches}.`);
       activeProcesses.set(processId, { 
         ...activeProcesses.get(processId), 
         status: 'interrupted', 
-        progress: ((i / totalFiles) * 100).toFixed(2),
-        result: null, 
+        progress: ((totalProcessedCount / totalFiles) * 100).toFixed(2),
+        result: `Interrupted at batch ${batchNumber}/${totalBatches}. Processed ${totalProcessedCount} of ${totalFiles} files.`, 
         timestamp: Date.now() 
       });
       break;
     }
 
     const currentBatch = unprocessedFiles.slice(i, i + batchSize);
-    processedDocs = await processBatchConcurrent(
-      currentBatch, 
-      String(localMountPoint), 
-      localSmbShareDir, 
-      { username, password }, 
-      BATCH_SIZE * 180000
-    );
+    let batchResults = [];
+    let batchError = null;
     
-    // Calculate progress based on completed files (i + batch size), not starting index
-    const completedFiles = Math.min(i + currentBatch.length, totalFiles);
+    try {
+      // Always try to process the batch, even if previous batches failed
+      batchResults = await processBatchConcurrent(
+        currentBatch, 
+        String(localMountPoint), 
+        localSmbShareDir, 
+        { username, password }, 
+        BATCH_SIZE * 180000
+      );
+    } catch (error) {
+      // Catch any unhandled errors and continue processing
+      batchError = error.message;
+      console.error(`❌ Batch ${batchNumber} threw error: ${error.message}`);
+      batchResults = [];
+    }
+    
+    // Track successful vs failed batches
+    const successfulInBatch = Array.isArray(batchResults) ? batchResults.length : 0;
+    totalProcessedCount += successfulInBatch;
+    
+    if (successfulInBatch === 0 && currentBatch.length > 0) {
+      // Record failed batch for later reporting
+      failedBatches.push({
+        batchNumber,
+        fileCount: currentBatch.length,
+        files: currentBatch.map(f => f.file_path),
+        reason: batchError || 'Timeout or processing error'
+      });
+      console.warn(`⚠️ Batch ${batchNumber}/${totalBatches} failed - 0 of ${currentBatch.length} files processed. Continuing...`);
+    } else if (successfulInBatch < currentBatch.length) {
+      // Partial success
+      const failed = currentBatch.length - successfulInBatch;
+      console.log(`⚠️ Batch ${batchNumber}/${totalBatches} partial - ${successfulInBatch} succeeded, ${failed} failed`);
+    } else {
+      console.log(`✅ Batch ${batchNumber}/${totalBatches} - ${successfulInBatch} of ${currentBatch.length} files processed`);
+    }
+    
+    // Calculate progress based on ACTUAL successfully processed files
+    const progressPercent = ((totalProcessedCount / totalFiles) * 100).toFixed(2);
     activeProcesses.set(processId, { 
       ...activeProcesses.get(processId), 
       status: 'running', 
-      progress: ((completedFiles / totalFiles) * 100).toFixed(2),
-      result: null, 
+      progress: progressPercent,
+      result: `Processing batch ${batchNumber}/${totalBatches}. Completed ${totalProcessedCount}/${totalFiles} files. ${failedBatches.length} batches failed.`, 
       timestamp: Date.now() 
     });
 
-    if (Array.isArray(processedDocs) && processedDocs.length > 0) {
-      console.log("the processed document is", processedDocs);
-      processedDocs.forEach(docArray => {
-        docArray.forEach(async (doc) => {
-          if (doc) {
+    // Process cache operations and CSV updates BEFORE updating progress
+    if (Array.isArray(batchResults) && batchResults.length > 0) {
+      console.log("the processed document is", batchResults);
+      
+      // Wait for all cache operations to complete
+      const cachePromises = [];
+      batchResults.forEach((doc) => {
+        if (doc) {
+          const processDoc = async () => {
             try {
               if (handleLocalFilesCache) {
                 await handleLocalFilesCache(doc, 'write');
@@ -568,10 +623,15 @@ async function processFilesInBatches(processId, activeProcesses, unprocessedFile
             } else {
               existingFileData.push(updatedRecord);
             }
-          }
-        });
+          };
+          cachePromises.push(processDoc());
+        }
       });
       
+      // Wait for all cache operations to finish
+      await Promise.all(cachePromises);
+      
+      // Save to CSV after all cache operations complete
       if (existingFileData && Array.isArray(existingFileData) && existingFileData.length > 0) {
         await saveToCsv(existingFileData, csvFilePath);
       } else {
@@ -579,18 +639,72 @@ async function processFilesInBatches(processId, activeProcesses, unprocessedFile
       }
     }
     
-    console.log(`Processed batch ${Math.floor(i / batchSize) + 1} and saved to file_data.csv`);
+    console.log(`Processed batch ${batchNumber} and saved to file_data.csv`);
+  }
+
+  // Determine final status based on results
+  const successRate = totalFiles > 0 ? (totalProcessedCount / totalFiles) * 100 : 0;
+  const failedFileCount = totalFiles - totalProcessedCount;
+  
+  let finalStatus = 'completed';
+  let finalMessage = '';
+  
+  if (totalProcessedCount === 0 && totalFiles > 0) {
+    // Complete failure - no files processed
+    finalStatus = 'failed';
+    finalMessage = `Process failed: 0 of ${totalFiles} files processed. All ${totalBatches} batches failed.`;
+  } else if (failedBatches.length === 0) {
+    // Perfect success
+    finalStatus = 'completed';
+    finalMessage = `Process completed successfully: ${totalProcessedCount} of ${totalFiles} files processed (100%).`;
+  } else if (failedBatches.length > 0 && totalProcessedCount > 0) {
+    // Partial success - some files processed, some failed
+    finalStatus = 'completed';
+    finalMessage = `Process completed with ${failedBatches.length} failed batches: ${totalProcessedCount} of ${totalFiles} files processed (${successRate.toFixed(1)}%). ${failedFileCount} files failed.`;
   }
 
   activeProcesses.set(processId, { 
     ...activeProcesses.get(processId), 
-    status: 'completed', 
-    progress: 100, 
-    result: 'Process completed successfully!', 
+    status: finalStatus, 
+    progress: successRate.toFixed(2), 
+    result: finalMessage, 
     timestamp: Date.now() 
   });
   
-  return { success: true, reason: 'Files processed successfully', documents: processedDocs };
+  // Log detailed summary
+  console.log(`\n📊 ========== PROCESSING SUMMARY ==========`);
+  console.log(`Status: ${finalStatus}`);
+  console.log(`Total Files: ${totalFiles}`);
+  console.log(`Successfully Processed: ${totalProcessedCount} (${successRate.toFixed(1)}%)`);
+  console.log(`Failed: ${failedFileCount}`);
+  console.log(`Total Batches: ${totalBatches}`);
+  console.log(`Successful Batches: ${totalBatches - failedBatches.length}`);
+  console.log(`Failed Batches: ${failedBatches.length}`);
+  
+  if (failedBatches.length > 0) {
+    console.log(`\n⚠️  Failed Batch Details:`);
+    failedBatches.forEach(batch => {
+      console.log(`  - Batch ${batch.batchNumber}: ${batch.fileCount} files (${batch.reason})`);
+      console.log(`    Files: ${batch.files.slice(0, 3).join(', ')}${batch.files.length > 3 ? '...' : ''}`);
+    });
+  }
+  console.log(`========================================\n`);
+  
+  return { 
+    success: totalProcessedCount > 0, // Success if at least some files processed
+    reason: finalMessage, 
+    documents: processedDocs,
+    stats: {
+      total: totalFiles,
+      processed: totalProcessedCount,
+      failed: failedFileCount,
+      successRate: successRate.toFixed(1),
+      totalBatches: totalBatches,
+      successfulBatches: totalBatches - failedBatches.length,
+      failedBatches: failedBatches.length,
+      failedBatchDetails: failedBatches
+    }
+  };
 }
 
 async function mountSmbShare(processId, activeProcesses, nasshare, username, password, ignorePaths, mountpoint = MOUNT_DIRECTORY) {

@@ -44,42 +44,48 @@ export default function DataServerOptions() {
   const pollProgress = (processId) => {
     const interval = setInterval(async () => {
       try {
-        setProgress("0");
         const { data } = await System.dataConnectors.dataserver.checkStatus({
           processId: processId,
         });
 
+        // Only update if we get valid data
+        if (!data) {
+          console.warn('No data received from status check, retrying...');
+          return;
+        }
+
         // Update the progress check in pollProgress function
         if (
-          data &&
-          (typeof data.progress === "number" ||
-            typeof data.progress === "string")
+          typeof data.progress === "number" ||
+          typeof data.progress === "string"
         ) {
           // Convert progress to number, default to 0 if conversion fails
           const progressString = String(data.progress) || "0";
           setProcessing(true);
           setLoading(true);
           setProgress(progressString);
+          console.log(`[SMB Progress] ${progressString}% - Status: ${data.status}`);
         }
 
-        // Check status from data object
+        // Check status from data object - only stop if truly completed/failed
         if (
-          data &&
-          (data?.status === "completed" ||
-            data?.status === "failed" ||
-            canceling)
+          data.status === "completed" ||
+          data.status === "failed" ||
+          data.status === "interrupted" ||
+          data.status === "expired" ||
+          canceling
         ) {
+          console.log(`[SMB Process] Finished with status: ${data.status}`);
           clearInterval(interval);
           setProcessing(false);
           setLoading(false);
           setProgress(null);
+          setProcessId(null); // Clear processId to prevent restart
         }
       } catch (error) {
         console.error("Error fetching progress:", error);
-        clearInterval(interval);
-        setProcessing(false);
-        setLoading(false);
-        setProgress(null);
+        // Don't stop polling on error - the process might still be running
+        // Only log and continue
       }
     }, 10000);
 

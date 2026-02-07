@@ -5,6 +5,7 @@ import System from "../../../../models/system";
 import showToast from "../../../../utils/toast";
 import Directory from "./Directory";
 import WorkspaceDirectory from "./WorkspaceDirectory";
+import EmbeddingProgressModal from "@/components/Modals/EmbeddingProgressModal";
 
 // OpenAI Cost per token
 // ref: https://openai.com/pricing#:~:text=%C2%A0/%201K%20tokens-,Embedding%20models,-Build%20advanced%20search
@@ -25,16 +26,32 @@ export default function DocumentSettings({ workspace, systemSettings }) {
   const [movedItems, setMovedItems] = useState([]);
   const [embeddingsCost, setEmbeddingsCost] = useState(0);
   const [loadingMessage, setLoadingMessage] = useState("");
+  const [totalFiles, setTotalFiles] = useState(0);
+  const [availableFilesCount, setAvailableFilesCount] = useState(0);
+  const [embeddedFilesCount, setEmbeddedFilesCount] = useState(0);
+  const [showEmbeddingProgress, setShowEmbeddingProgress] = useState(false);
+  const [embeddingSessionId, setEmbeddingSessionId] = useState(null);
 
   async function fetchKeys(refetchWorkspace = false, rescan = false) {
     setLoading(true);
-    const localFiles = await System.localFiles(rescan);
+    const response = await System.localFiles(rescan);
+    console.log('[Documents] API response:', response);
+    console.log('[Documents] response.totalFiles:', response?.totalFiles);
+    console.log('[Documents] response.localFiles:', response?.localFiles);
+    
+    const localFiles = response?.localFiles || response;
+    const totalFilesCount = response?.totalFiles || 0;
+    
+    console.log('[Documents] Total files count:', totalFilesCount);
+    console.log('[Documents] localFiles structure:', localFiles);
+    setTotalFiles(totalFilesCount);
     
     // Add null check for localFiles
     if (!localFiles || !localFiles.items) {
       console.warn('No local files found or invalid structure');
       setAvailableDocs({ name: "documents", type: "folder", items: [] });
       setWorkspaceDocs({ name: "documents", type: "folder", items: [] });
+      setTotalFiles(0);
       setLoading(false);
       return;
     }
@@ -84,8 +101,20 @@ export default function DocumentSettings({ workspace, systemSettings }) {
       }),
     };
 
+    // Calculate counts
+    const availableCount = availableDocs.items.reduce(
+      (sum, folder) => sum + (folder.items?.length || 0),
+      0
+    );
+    const embeddedCount = workspaceDocs.items.reduce(
+      (sum, folder) => sum + (folder.items?.length || 0),
+      0
+    );
+
     setAvailableDocs(availableDocs);
     setWorkspaceDocs(workspaceDocs);
+    setAvailableFilesCount(availableCount);
+    setEmbeddedFilesCount(embeddedCount);
     setLoading(false);
   }
 
@@ -96,37 +125,56 @@ export default function DocumentSettings({ workspace, systemSettings }) {
   const updateWorkspace = async (e, forceReEmbed = false) => {
     e.preventDefault();
     setLoading(true);
-    showToast("Updating workspace...", "info", { autoClose: false });
+    showToast("Starting document embedding...", "info", { autoClose: false });
     setLoadingMessage("This may take a while for large documents");
 
     const changesToSend = {
       adds: movedItems.map((item) => `${item.folderName}/${item.name}`),
       forceReEmbed: forceReEmbed,
+      useSession: true, // Enable session mode for progress tracking
     };
 
     setSelectedItems({});
     setHasChanges(false);
     setHighlightWorkspace(false);
+    
     await Workspace.modifyEmbeddings(workspace.slug, changesToSend)
       .then((res) => {
-        if (!!res.message) {
+        if (res.sessionId) {
+          // Session mode - show progress modal
+          setEmbeddingSessionId(res.sessionId);
+          setShowEmbeddingProgress(true);
+          showToast("Embedding started - tracking progress", "success", { clear: true });
+          setLoading(false);
+          setLoadingMessage("");
+        } else if (!!res.message) {
+          // Error
           showToast(`Error: ${res.message}`, "error", { clear: true });
-          return;
+          setLoading(false);
+          setLoadingMessage("");
+        } else {
+          // Legacy sync mode
+          showToast("Workspace updated successfully.", "success", { clear: true });
+          setLoading(false);
+          setLoadingMessage("");
         }
-        showToast("Workspace updated successfully.", "success", {
-          clear: true,
-        });
       })
       .catch((error) => {
-        showToast(`Workspace update failed: ${error}`, "error", {
-          clear: true,
-        });
+        showToast(`Workspace update failed: ${error}`, "error", { clear: true });
+        setLoading(false);
+        setLoadingMessage("");
       });
 
     setMovedItems([]);
-    await fetchKeys(true);
-    setLoading(false);
-    setLoadingMessage("");
+  };
+
+  const handleEmbeddingProgressClose = async (completed) => {
+    setShowEmbeddingProgress(false);
+    setEmbeddingSessionId(null);
+    if (completed) {
+      showToast("Documents embedded successfully!", "success");
+    }
+    await fetchKeys(true); // Refresh workspace
   };
 
   const moveSelectedItemsToWorkspace = () => {
@@ -218,6 +266,8 @@ export default function DocumentSettings({ workspace, systemSettings }) {
         setHighlightWorkspace={setHighlightWorkspace}
         moveToWorkspace={moveSelectedItemsToWorkspace}
         setLoadingMessage={setLoadingMessage}
+        totalFiles={totalFiles}
+        availableFilesCount={availableFilesCount}
       />
       <div className="upload-modal-arrow">
         <ArrowsDownUp className="text-white text-base font-bold rotate-90 w-11 h-11" />
@@ -235,6 +285,15 @@ export default function DocumentSettings({ workspace, systemSettings }) {
         saveChanges={updateWorkspace}
         embeddingCosts={embeddingsCost}
         movedItems={movedItems}
+        embeddedFilesCount={embeddedFilesCount}
+      />
+      
+      {/* Embedding Progress Modal */}
+      <EmbeddingProgressModal
+        isOpen={showEmbeddingProgress}
+        onClose={handleEmbeddingProgressClose}
+        sessionId={embeddingSessionId}
+        workspace={workspace}
       />
     </div>
   );

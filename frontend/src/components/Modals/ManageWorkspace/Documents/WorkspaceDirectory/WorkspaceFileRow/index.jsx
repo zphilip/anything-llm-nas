@@ -33,7 +33,7 @@ export default function WorkspaceFileRow({
         adds: [],
         deletes: [`${folderName}/${item.name}`],
       });
-      await fetchKeys(true, true); // Force full resync after deletion
+      await fetchKeys(true, false); // Backend updates cached status in Redis automatically
     } catch (error) {
       console.error("Failed to remove document:", error);
     }

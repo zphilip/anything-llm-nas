@@ -508,10 +508,404 @@ function systemEndpoints(app) {
           }
         }
         
-        response.status(200).json({ localFiles });
+        // Avoid sending extremely large payloads which can crash the server.
+        // Deep-clean large fields from the structure (pageContent, imageBase64)
+        function cleanLocalFiles(obj) {
+          if (!obj || typeof obj !== 'object') return obj;
+          if (Array.isArray(obj)) return obj.map(cleanLocalFiles);
+          const out = {};
+          for (const [k, v] of Object.entries(obj)) {
+            if (k === 'pageContent' || k === 'imageBase64') continue; // strip large blobs
+            if (k === 'items' && Array.isArray(v)) {
+              out.items = v.map(item => {
+                // shallow copy but strip large fields on each item
+                const copy = { ...item };
+                delete copy.pageContent;
+                delete copy.imageBase64;
+                // ensure nested items are cleaned
+                if (Array.isArray(copy.items)) copy.items = copy.items.map(cleanLocalFiles);
+                return copy;
+              });
+              continue;
+            }
+            out[k] = (typeof v === 'object') ? cleanLocalFiles(v) : v;
+          }
+          return out;
+        }
+
+        const MAX_LOCALFILES_JSON_BYTES = parseInt(process.env.MAX_LOCALFILES_JSON_BYTES || String(5 * 1024 * 1024)); // 5MB default
+        try {
+          const cleaned = cleanLocalFiles(localFiles);
+          const jsonStr = JSON.stringify(cleaned);
+          
+          // Calculate total file count
+          console.log('[/system/local-files] cleaned.items:', cleaned.items?.length);
+          const totalFiles = (cleaned.items || []).reduce((total, folder) => {
+            const folderFileCount = (folder.items || []).length;
+            console.log(`[/system/local-files] Folder ${folder.name}: ${folderFileCount} files`);
+            return total + folderFileCount;
+          }, 0);
+          console.log('[/system/local-files] Total files calculated:', totalFiles);
+          
+          if (jsonStr.length > MAX_LOCALFILES_JSON_BYTES) {
+            // Build a small summary instead of returning the full structure
+            const folderSummaries = (cleaned.items || []).map((f) => ({
+              name: f.name,
+              itemCount: (f.items || []).length,
+            }));
+            response.status(200).json({
+              warning: 'localFiles payload too large after cleaning, returning summary',
+              folderCount: folderSummaries.length,
+              totalFiles,
+              folders: folderSummaries,
+            });
+          } else {
+            response.status(200).json({ 
+              localFiles: cleaned,
+              totalFiles 
+            });
+          }
+        } catch (err) {
+          console.warn('Failed to stringify cleaned localFiles, returning summary instead:', err && err.message);
+          const folderSummaries = (localFiles.items || []).map((f) => ({
+            name: f.name,
+            itemCount: (f.items || []).length,
+          }));
+          const totalFiles = folderSummaries.reduce((s, f) => s + f.itemCount, 0);
+          response.status(200).json({
+            warning: 'localFiles payload could not be serialized, returning summary',
+            folderCount: folderSummaries.length,
+            totalFiles,
+            folders: folderSummaries,
+          });
+        }
       } catch (e) {
         console.error(e.message, e);
         response.sendStatus(500).end();
+      }
+    }
+  );
+
+  app.post(
+    "/system/refresh-folder-cache",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { folder } = reqBody(request);
+        if (!folder) return response.status(400).json({ success: false, error: 'folder required' });
+        const { refreshFolderCache } = require('../utils/files');
+        try {
+          const subdocs = await refreshFolderCache(folder);
+          return response.status(200).json({ success: true, folder: folder, items: (subdocs.items || []).length });
+        } catch (err) {
+          console.error('Failed to refresh folder cache:', err && err.message ? err.message : err);
+          return response.status(500).json({ success: false, error: err && err.message ? err.message : 'failed' });
+        }
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  // Start a new incremental resync session
+  app.post(
+    "/system/start-resync",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { batchSize, forceRefresh, folderFilter } = reqBody(request);
+        const { resyncSessionManager } = require('../utils/files/ResyncSessionManager');
+        const { incrementalResync } = require('../utils/files');
+
+        try {
+          const session = resyncSessionManager.createSession({
+            batchSize: batchSize || 20,
+            forceRefresh: forceRefresh || false,
+            folderFilter: folderFilter || null,
+          });
+
+          // Start resync in background
+          incrementalResync(session).catch(err => {
+            console.error('Resync failed:', err);
+          });
+
+          return response.status(200).json({ 
+            success: true, 
+            sessionId: session.sessionId,
+            status: session.getStatus()
+          });
+        } catch (err) {
+          return response.status(400).json({ 
+            success: false, 
+            error: err.message 
+          });
+        }
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  // Get resync session status
+  app.get(
+    "/system/resync-status/:sessionId?",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { sessionId } = request.params;
+        const { resyncSessionManager } = require('../utils/files/ResyncSessionManager');
+
+        if (sessionId) {
+          const session = resyncSessionManager.getSession(sessionId);
+          if (!session) {
+            return response.status(404).json({ success: false, error: 'Session not found' });
+          }
+          return response.status(200).json({ success: true, status: session.getStatus() });
+        } else {
+          // Return active session or all sessions
+          const activeSession = resyncSessionManager.getActiveSession();
+          return response.status(200).json({ 
+            success: true, 
+            activeSession: activeSession ? activeSession.getStatus() : null,
+            allSessions: resyncSessionManager.getAllSessions()
+          });
+        }
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  // Pause active resync session
+  app.post(
+    "/system/pause-resync/:sessionId",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { sessionId } = request.params;
+        const { resyncSessionManager } = require('../utils/files/ResyncSessionManager');
+        
+        const session = resyncSessionManager.getSession(sessionId);
+        if (!session) {
+          return response.status(404).json({ success: false, error: 'Session not found' });
+        }
+
+        session.pause();
+        return response.status(200).json({ 
+          success: true, 
+          status: session.getStatus() 
+        });
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  // Resume paused resync session
+  app.post(
+    "/system/resume-resync/:sessionId",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { sessionId } = request.params;
+        const { resyncSessionManager } = require('../utils/files/ResyncSessionManager');
+        
+        const session = resyncSessionManager.getSession(sessionId);
+        if (!session) {
+          return response.status(404).json({ success: false, error: 'Session not found' });
+        }
+
+        if (session.status !== 'paused') {
+          return response.status(400).json({ success: false, error: 'Session is not paused' });
+        }
+
+        session.resume();
+        
+        // Continue the resync from where it left off
+        const { incrementalResync } = require('../utils/files');
+        incrementalResync(session).catch(err => {
+          console.error('Resume resync failed:', err);
+          session.fail(err);
+        });
+
+        return response.status(200).json({ 
+          success: true, 
+          status: session.getStatus() 
+        });
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  // Cancel active resync session
+  app.post(
+    "/system/cancel-resync/:sessionId",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { sessionId } = request.params;
+        const { resyncSessionManager } = require('../utils/files/ResyncSessionManager');
+        
+        const session = resyncSessionManager.getSession(sessionId);
+        if (!session) {
+          return response.status(404).json({ success: false, error: 'Session not found' });
+        }
+
+        session.cancel();
+        return response.status(200).json({ 
+          success: true, 
+          status: session.getStatus() 
+        });
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  // SSE endpoint for real-time resync progress
+  app.get(
+    "/system/resync-progress/:sessionId",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { sessionId } = request.params;
+        const { resyncSessionManager } = require('../utils/files/ResyncSessionManager');
+        
+        const session = resyncSessionManager.getSession(sessionId);
+        if (!session) {
+          return response.status(404).json({ success: false, error: 'Session not found' });
+        }
+
+        // Set up SSE
+        response.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'Access-Control-Allow-Origin': '*',
+        });
+
+        // Send initial status
+        response.write(`data: ${JSON.stringify({ type: 'status', data: session.getStatus() })}\n\n`);
+
+        // Listen for progress events
+        const onProgress = (status) => {
+          response.write(`data: ${JSON.stringify({ type: 'progress', data: status })}\n\n`);
+        };
+
+        const onBatchComplete = (data) => {
+          response.write(`data: ${JSON.stringify({ type: 'batchComplete', data })}\n\n`);
+        };
+
+        const onComplete = (status) => {
+          response.write(`data: ${JSON.stringify({ type: 'complete', data: status })}\n\n`);
+          cleanup();
+        };
+
+        const onFailed = (status) => {
+          response.write(`data: ${JSON.stringify({ type: 'failed', data: status })}\n\n`);
+          cleanup();
+        };
+
+        const onPaused = (status) => {
+          response.write(`data: ${JSON.stringify({ type: 'paused', data: status })}\n\n`);
+        };
+
+        const onCancelled = (status) => {
+          response.write(`data: ${JSON.stringify({ type: 'cancelled', data: status })}\n\n`);
+          cleanup();
+        };
+
+        session.on('progress', onProgress);
+        session.on('batchComplete', onBatchComplete);
+        session.on('complete', onComplete);
+        session.on('failed', onFailed);
+        session.on('paused', onPaused);
+        session.on('cancelled', onCancelled);
+
+        const cleanup = () => {
+          session.off('progress', onProgress);
+          session.off('batchComplete', onBatchComplete);
+          session.off('complete', onComplete);
+          session.off('failed', onFailed);
+          session.off('paused', onPaused);
+          session.off('cancelled', onCancelled);
+        };
+
+        // Handle client disconnect
+        request.on('close', () => {
+          cleanup();
+        });
+
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
+    }
+  );
+
+  app.get(
+    "/system/cache-status",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { documentsPath } = require('../utils/files');
+        const { redisHelper } = require('../utils/files/redis');
+        const folders = fs.existsSync(documentsPath)
+          ? fs.readdirSync(documentsPath).filter((f) => {
+              const folderPath = path.resolve(documentsPath, f);
+              return fs.existsSync(folderPath) && fs.lstatSync(folderPath).isDirectory();
+            })
+          : [];
+
+        const results = [];
+        for (const folder of folders) {
+          let redisPresent = false;
+          let redisCount = 0;
+          try {
+            const fd = await redisHelper.getFolderData(folder);
+            if (fd && Array.isArray(fd.items)) {
+              redisPresent = true;
+              redisCount = fd.items.length;
+            }
+          } catch (err) {
+            // ignore
+          }
+
+          const diskCachePath = path.join(__dirname, '..', 'storage', 'cache', 'folders', `${folder}.json`);
+          let diskPresent = false;
+          let diskCount = 0;
+          let diskSize = 0;
+          try {
+            if (fs.existsSync(diskCachePath)) {
+              diskPresent = true;
+              const stat = fs.statSync(diskCachePath);
+              diskSize = stat.size;
+              try {
+                const raw = fs.readFileSync(diskCachePath, 'utf8');
+                const parsed = JSON.parse(raw);
+                diskCount = Array.isArray(parsed.items) ? parsed.items.length : 0;
+              } catch (err) {
+                // ignore parse errors
+              }
+            }
+          } catch (err) {
+            // ignore
+          }
+
+          results.push({ folder, redisPresent, redisCount, diskPresent, diskCount, diskSize });
+        }
+
+        response.status(200).json({ folders: results });
+      } catch (e) {
+        console.error('Error in /system/cache-status:', e && e.message ? e.message : e);
+        response.status(500).json({ error: e && e.message ? e.message : 'error' });
       }
     }
   );

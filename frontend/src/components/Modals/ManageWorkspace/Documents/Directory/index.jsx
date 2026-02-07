@@ -4,7 +4,7 @@ import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import FolderRow from "./FolderRow";
 import System from "@/models/system";
-import { MagnifyingGlass, Plus, Trash, ArrowsClockwise } from "@phosphor-icons/react";
+import { MagnifyingGlass, Plus, Trash, ArrowsClockwise, ArrowClockwise } from "@phosphor-icons/react";
 import Document from "@/models/document";
 import showToast from "@/utils/toast";
 import FolderSelectionPopup from "./FolderSelectionPopup";
@@ -17,6 +17,7 @@ import ContextMenu from "./ContextMenu";
 import { Tooltip } from "react-tooltip";
 import { safeJsonParse } from "@/utils/request";
 import { deleteDocsCache } from '../DocumentsCache';
+import ResyncProgressModal from "@/components/Modals/ResyncProgressModal";
 
 function Directory({
   files,
@@ -31,11 +32,16 @@ function Directory({
   moveToWorkspace,
   setLoadingMessage,
   loadingMessage,
+  totalFiles = 0,
+  availableFilesCount = 0,
 }) {
   const { t } = useTranslation();
   const [amountSelected, setAmountSelected] = useState(0);
   const [showFolderSelection, setShowFolderSelection] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  
+  console.log('[Directory] Received totalFiles prop:', totalFiles);
+  
   const {
     isOpen: isFolderModalOpen,
     openModal: openFolderModal,
@@ -46,6 +52,8 @@ function Directory({
     x: 0,
     y: 0,
   });
+  const [showResyncProgress, setShowResyncProgress] = useState(false);
+  const [resyncSessionId, setResyncSessionId] = useState(null);
 
   useEffect(() => {
     setAmountSelected(Object.keys(selectedItems).length);
@@ -195,39 +203,92 @@ function Directory({
   };
   const handleResync = async () => {
     try {
-      // Clear cache using the proper function
+      // Clear cache first
       await deleteDocsCache();
-      // Fetch keys with rescan
-      await fetchKeys(true, true);
-      showToast(t("connectors.directory.resync-success") || "Documents resynced successfully", "success");
+      
+      // Start incremental resync session
+      const { success, sessionId, error } = await System.startResync({
+        batchSize: 20,
+      });
+      
+      if (!success || !sessionId) {
+        throw new Error(error || 'Failed to start resync session');
+      }
+      
+      // Show progress modal
+      setResyncSessionId(sessionId);
+      setShowResyncProgress(true);
     } catch (error) {
       console.error('Resync failed:', error);
-      showToast(t("connectors.directory.resync-error") || "Failed to resync documents", "error");
+      showToast(t("connectors.directory.resync-error") || "Failed to start resync", "error");
     }
   };
+
+  const handleResyncComplete = async (completed) => {
+    setShowResyncProgress(false);
+    setResyncSessionId(null);
+    
+    if (completed) {
+      // Load from Redis cache (already populated by resync) - no need to rescan again
+      await fetchKeys(true, false);
+      showToast(t("connectors.directory.resync-success") || "Documents resynced successfully", "success");
+    }
+  };
+
+  const handleRefresh = async () => {
+    try {
+      setLoading(true);
+      // Reload cache file and get updated file list and count
+      await fetchKeys(true, false); // refetchWorkspace=true, rescan=false
+      showToast("File list refreshed successfully", "success");
+    } catch (error) {
+      console.error('Refresh failed:', error);
+      showToast("Failed to refresh file list", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <>
-      {/* Resync Button - Positioned at top-left with extra spacing */}
-      <button
-        onClick={handleResync}
-        className="absolute -top-10 left-8 border-none flex items-center gap-x-2 cursor-pointer px-[14px] py-[7px] rounded-lg hover:bg-theme-sidebar-subitem-hover z-30"
-        title={t("connectors.directory.resync") || "Resync documents"}
-      >
-        <ArrowsClockwise className="w-5 h-5 text-white" />
-        <span className="text-white">Resync</span>
-      </button>
+      {/* Resync and Refresh Buttons - Positioned at top-left with extra spacing */}
+      <div className="absolute -top-10 left-8 flex items-center gap-x-2 z-30">
+        <button
+          onClick={handleResync}
+          className="border-none flex items-center gap-x-2 cursor-pointer px-[14px] py-[7px] rounded-lg hover:bg-theme-sidebar-subitem-hover"
+          title={t("connectors.directory.resync") || "Resync documents"}
+        >
+          <ArrowsClockwise className="w-5 h-5 text-white" />
+          <span className="text-white">Resync</span>
+        </button>
+        <button
+          onClick={handleRefresh}
+          className="border-none flex items-center gap-x-2 cursor-pointer px-[14px] py-[7px] rounded-lg hover:bg-theme-sidebar-subitem-hover"
+          title="Refresh file list from cache"
+        >
+          <ArrowClockwise className="w-5 h-5 text-white" />
+          <span className="text-white">Refresh</span>
+        </button>
+      </div>
       <div className="px-8 pb-8" onContextMenu={handleContextMenu}>
         <div className="flex flex-col gap-y-6">
-          <div className="flex items-center justify-between w-[560px] px-5 relative">
-            <h3 className="text-white text-base font-bold">
-              {t("connectors.directory.my-documents")}
-            </h3>
+          <div className="flex items-center justify-between w-[680px] px-5 relative">
+            <div className="flex items-center gap-x-2 whitespace-nowrap">
+              <h3 className="text-white text-base font-bold">
+                {t("connectors.directory.my-documents")}
+              </h3>
+              {availableFilesCount > 0 && (
+                <span className="text-white text-base font-bold">
+                  ({availableFilesCount} {availableFilesCount === 1 ? 'file' : 'files'} available)
+                </span>
+              )}
+            </div>
             <div className="relative">
               <input
                 type="search"
                 placeholder={t("connectors.directory.search-document")}
                 onChange={handleSearch}
-                className="border-none search-input bg-theme-settings-input-bg text-white placeholder:text-theme-settings-input-placeholder focus:outline-primary-button active:outline-primary-button outline-none text-sm rounded-lg pl-9 pr-2.5 py-2 w-[250px] h-[32px] light:border-theme-modal-border light:border"
+                className="border-none search-input bg-theme-settings-input-bg text-white placeholder:text-theme-settings-input-placeholder focus:outline-primary-button active:outline-primary-button outline-none text-sm rounded-lg pl-9 pr-2.5 py-2 w-[200px] h-[32px] light:border-theme-modal-border light:border"
               />
               <MagnifyingGlass
                 size={14}
@@ -357,6 +418,13 @@ function Directory({
         />
       </div>
       <DirectoryTooltips />
+      
+      {/* Resync Progress Modal */}
+      <ResyncProgressModal
+        isOpen={showResyncProgress}
+        onClose={handleResyncComplete}
+        sessionId={resyncSessionId}
+      />
     </>
   );
 }
