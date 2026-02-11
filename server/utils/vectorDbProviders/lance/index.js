@@ -189,6 +189,8 @@ const LanceDb = {
       scores: [],
     };
 
+    console.log(`[COSINE] Similarity threshold: ${similarityThreshold}`);
+
     // Cap the limit to prevent LanceDB Arrow overflow errors
     const queryLimit = Math.min(topN, 200);
 

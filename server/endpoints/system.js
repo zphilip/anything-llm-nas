@@ -537,6 +537,8 @@ function systemEndpoints(app) {
         try {
           const cleaned = cleanLocalFiles(localFiles);
           const jsonStr = JSON.stringify(cleaned);
+          console.log('[/system/local-files] JSON size bytes:', jsonStr.length);
+          console.log('[/system/local-files] MAX_LOCALFILES_JSON_BYTES:', MAX_LOCALFILES_JSON_BYTES);
           
           // Calculate total file count
           console.log('[/system/local-files] cleaned.items:', cleaned.items?.length);
@@ -553,6 +555,10 @@ function systemEndpoints(app) {
               name: f.name,
               itemCount: (f.items || []).length,
             }));
+            console.warn('[/system/local-files] Payload too large, returning summary. Folder count:', folderSummaries.length);
+            if (folderSummaries.length > 0) {
+              console.warn('[/system/local-files] First summary folder:', folderSummaries[0]);
+            }
             response.status(200).json({
               warning: 'localFiles payload too large after cleaning, returning summary',
               folderCount: folderSummaries.length,
