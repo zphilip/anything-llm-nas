@@ -39,6 +39,33 @@ export default function DocumentSettings({ workspace, systemSettings }) {
     console.log('[Documents] response.totalFiles:', response?.totalFiles);
     console.log('[Documents] response.localFiles:', response?.localFiles);
     
+    // Check if response is a summary (too large to send full data)
+    if (response?.warning && response?.folders) {
+      console.warn('[Documents] Received summary response:', response.warning);
+      console.log('[Documents] Folders summary:', response.folders);
+      setTotalFiles(response.totalFiles || 0);
+      
+      // Build a placeholder structure showing folder summaries
+      const placeholderDocs = {
+        name: "documents",
+        type: "folder",
+        items: response.folders.map(folder => ({
+          name: folder.name,
+          type: "folder",
+          items: [], // Empty, will be loaded on demand
+          _summary: true,
+          _itemCount: folder.itemCount,
+        }))
+      };
+      
+      setAvailableDocs(placeholderDocs);
+      setWorkspaceDocs({ name: "documents", type: "folder", items: [] });
+      setLoading(false);
+      
+      alert(`Directory contains ${response.totalFiles} files across ${response.folderCount} folder(s). This is too large to display all at once. Please use the search feature or contact support to enable pagination.`);
+      return;
+    }
+    
     const localFiles = response?.localFiles || response;
     const totalFilesCount = response?.totalFiles || 0;
     

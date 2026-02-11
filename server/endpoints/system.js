@@ -614,6 +614,46 @@ function systemEndpoints(app) {
     }
   );
 
+  // Get documents by folder name (for lazy loading large directories)
+  app.get(
+    "/system/local-files/:folderName",
+    [validatedRequest],
+    async (request, response) => {
+      try {
+        const { folderName } = request.params;
+        if (!folderName) {
+          return response.status(400).json({ 
+            success: false, 
+            error: 'Folder name required' 
+          });
+        }
+
+        const { getDocumentsByFolder } = require('../utils/files');
+        const result = await getDocumentsByFolder(folderName);
+        
+        if (result.code !== 200) {
+          return response.status(result.code).json({
+            success: false,
+            error: result.error
+          });
+        }
+
+        return response.status(200).json({
+          success: true,
+          folder: result.folder,
+          documents: result.documents,
+          totalFiles: result.documents.length
+        });
+      } catch (e) {
+        console.error('[/system/local-files/:folder] Error:', e.message, e);
+        response.status(500).json({
+          success: false,
+          error: 'Internal server error'
+        });
+      }
+    }
+  );
+
   // Start a new incremental resync session
   app.post(
     "/system/start-resync",
