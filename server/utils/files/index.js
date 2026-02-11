@@ -21,9 +21,13 @@ const hotdirPath =
     : path.resolve(process.env.STORAGE_DIR, `../../collector/hotdir`);
 
 // Cache file for storing directory structure
-const CACHE_FILE = path.join(__dirname, '../../storage/cache/localFiles.json');
+// Use STORAGE_DIR when provided, otherwise fall back to relative ./storage
+const storageBasePath = process.env.STORAGE_DIR
+  ? path.resolve(process.env.STORAGE_DIR)
+  : path.resolve(__dirname, '../../storage');
+const CACHE_FILE = path.join(storageBasePath, 'cache', 'localFiles.json');
 // Per-folder cache directory (stores small metadata-only caches)
-const FOLDER_CACHE_DIR = path.join(__dirname, '../../storage/cache/folders');
+const FOLDER_CACHE_DIR = path.join(storageBasePath, 'cache', 'folders');
 
 // Batch size for processing files
 const BATCH_SIZE = 100;

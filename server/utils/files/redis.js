@@ -121,22 +121,44 @@ class RedisHelper {
   }
 
   /**
- * Load the cache file into Redis on startup
+ * Load per-folder cache files into Redis on startup (replaces old monolithic cache)
  */
   async loadCacheFileToRedis() {
     try {
-      if (fs.existsSync(this.CACHE_FILE)) {
-        const fileData = fs.readFileSync(this.CACHE_FILE, "utf-8");
-        const directory = JSON.parse(fileData);
-
-        await this.redis.set(REDIS_KEYS.DIRECTORY_DATA, JSON.stringify(directory));
-        console.log("✅ Directory data loaded into Redis.");
-      } else {
-        console.log("⚠️ Cache file not found. Using an empty directory.");
-        await this.redis.set(REDIS_KEYS.DIRECTORY_DATA, JSON.stringify({ name: "documents", type: "folder", items: [] }));
+      const storageBasePath = process.env.STORAGE_DIR
+        ? path.resolve(process.env.STORAGE_DIR)
+        : path.resolve(__dirname, '../../storage');
+      const FOLDER_CACHE_DIR = path.join(storageBasePath, 'cache', 'folders');
+      
+      if (!fs.existsSync(FOLDER_CACHE_DIR)) {
+        console.log("ℹ️ No per-folder cache directory found. Will build cache on first access.");
+        return;
       }
+
+      const cacheFiles = fs.readdirSync(FOLDER_CACHE_DIR).filter(f => f.endsWith('.json'));
+      if (cacheFiles.length === 0) {
+        console.log("ℹ️ No per-folder cache files found. Will build cache on first access.");
+        return;
+      }
+
+      let loadedCount = 0;
+      for (const cacheFile of cacheFiles) {
+        try {
+          const folderName = path.basename(cacheFile, '.json').replace(/_/g, '-'); // Restore original folder name
+          const filePath = path.join(FOLDER_CACHE_DIR, cacheFile);
+          const fileData = fs.readFileSync(filePath, 'utf-8');
+          const folderData = JSON.parse(fileData);
+          
+          await this.redis.set(REDIS_KEYS.FOLDER_DATA + folderName, JSON.stringify(folderData));
+          loadedCount++;
+        } catch (err) {
+          console.warn(`⚠️ Failed to load cache file ${cacheFile}:`, err.message);
+        }
+      }
+      
+      console.log(`✅ Loaded ${loadedCount} folder cache(s) into Redis from disk.`);
     } catch (error) {
-      console.error("❌ Error loading directory data:", error);
+      console.error("❌ Error loading folder cache data:", error);
     }
   }
 
