@@ -201,32 +201,9 @@ const LanceDb = {
       .toArray();
 
     console.log(`[MEMORY] Fetched ${response.length} cosine similarity results from LanceDB`);
-    
-    // CRITICAL: Strip base64 data IMMEDIATELY to prevent OOM
-    let totalBase64Stripped = 0;
-    const cleanedResponse = response.map((item) => {
-      const cleaned = { ...item };
-      
-      if (cleaned.pageContent && typeof cleaned.pageContent === 'string' && cleaned.pageContent.length > 10000) {
-        const originalSize = cleaned.pageContent.length;
-        cleaned.pageContent = `[Image data stripped - ${(originalSize / 1024).toFixed(0)}KB]`;
-        totalBase64Stripped += originalSize;
-      }
-      
-      // Remove imageBase64 field entirely - not used for display
-      if (cleaned.imageBase64 && typeof cleaned.imageBase64 === 'string') {
-        totalBase64Stripped += cleaned.imageBase64.length;
-        delete cleaned.imageBase64;
-      }
-      
-      return cleaned;
-    });
-    
-    if (totalBase64Stripped > 0) {
-      console.log(`[MEMORY] Stripped ${(totalBase64Stripped / 1024 / 1024).toFixed(2)}MB of base64 data`);
-    }
+    console.log(`[MEMORY] Response contains ${response.filter(r => r.imageBase64).length} items with imageBase64`);
 
-    cleanedResponse.forEach((item, index) => {
+    response.forEach((item, index) => {
       const similarity = this.distanceToSimilarity(item._distance);
       if (index < 5) {
         console.log(`  [Result ${index}] Distance: ${item._distance}, Similarity: ${similarity}`);
@@ -283,7 +260,11 @@ const LanceDb = {
         return;
       }
 
-      result.contextTexts.push(rest.text);
+      // Strip base64 ONLY from context text (sent to LLM) to save memory
+      const contextText = rest.text || '';
+      result.contextTexts.push(contextText);
+      
+      // Preserve imageBase64 in sourceDocuments (displayed to user)
       result.sourceDocuments.push({
         ...rest,
         score: similarity,
@@ -453,33 +434,11 @@ const LanceDb = {
 
     console.log(`[MEMORY] Fetched ${response.length} results from LanceDB`);
     
-    // CRITICAL: Strip base64 data IMMEDIATELY to prevent OOM
-    // Each base64 image can be 1-5MB, so 200 images = 200MB-1GB in memory!
-    let totalBase64Stripped = 0;
-    const cleanedResponse = response.map((item, idx) => {
-      const cleaned = { ...item };
-      
-      // Strip base64 from pageContent field (used for images)
-      if (cleaned.pageContent && typeof cleaned.pageContent === 'string' && cleaned.pageContent.length > 10000) {
-        const originalSize = cleaned.pageContent.length;
-        cleaned.pageContent = `[Image data stripped - ${(originalSize / 1024).toFixed(0)}KB]`;
-        totalBase64Stripped += originalSize;
-      }
-      
-      // Remove imageBase64 field entirely - not used for display
-      if (cleaned.imageBase64 && typeof cleaned.imageBase64 === 'string') {
-        totalBase64Stripped += cleaned.imageBase64.length;
-        delete cleaned.imageBase64;
-      }
-      
-      return cleaned;
-    });
-    
-    console.log(`[MEMORY] Stripped ${(totalBase64Stripped / 1024 / 1024).toFixed(2)}MB of base64 data from ${response.length} results`);
-    console.log(`[MEMORY] Estimated memory saved: ${(totalBase64Stripped / 1024 / 1024).toFixed(2)}MB`);
+    // Keep original response with imageBase64 for sources, we'll strip when adding to contextTexts
+    console.log(`[MEMORY] Response contains ${response.filter(r => r.imageBase64).length} items with imageBase64`);
 
     // DIAGNOSTIC: Check first stored vector if available
-    if (cleanedResponse.length > 0) {
+    if (response.length > 0) {
       console.log("[DIAGNOSTIC] First Result Keys:", Object.keys(response[0]));
       // Create safe version for logging without base64 content
       const safeResult = { ...response[0] };
@@ -520,7 +479,7 @@ const LanceDb = {
       console.warn("LanceDB returned NaN distances. Ensure your vectors are normalized.");
     }
 
-    cleanedResponse.forEach((item, index) => {
+    response.forEach((item, index) => {
       if (index < 5) {
         console.log(`  [Result ${index}] L2 Distance: ${item._distance}`);
       }
@@ -537,7 +496,11 @@ const LanceDb = {
         return;
       }
 
-      result.contextTexts.push(rest.text);
+      // Strip base64 ONLY from context text (sent to LLM) to save memory
+      const contextText = rest.text || '';
+      result.contextTexts.push(contextText);
+      
+      // Preserve imageBase64 in sourceDocuments (displayed to user)
       result.sourceDocuments.push({
         ...rest,
         score: item._distance, // Use raw L2 distance score
