@@ -475,7 +475,7 @@ const LanceDb = {
       }
     }
 
-    if (cleanedResponse.some(item => isNaN(item._distance))) {
+    if (response.some(item => isNaN(item._distance))) {
       console.warn("LanceDB returned NaN distances. Ensure your vectors are normalized.");
     }
 
