@@ -95,6 +95,25 @@ export default function ImageSearch() {
       console.log("[loadBase64Images] Processing", rawImages.length, "images");
       console.log("[loadBase64Images] First image structure:", rawImages[0]);
       
+      const toPublicDocumentUrl = (filePath) => {
+        if (!filePath || typeof filePath !== "string") return filePath;
+        let normalized = filePath.replace("file://", "");
+
+        const storageDocumentsMarker = "/storage/documents/";
+        const storageIndex = normalized.indexOf(storageDocumentsMarker);
+        if (storageIndex !== -1) {
+          return `/documents/${normalized.slice(storageIndex + storageDocumentsMarker.length)}`;
+        }
+
+        const documentsMarker = "/documents/";
+        const documentsIndex = normalized.indexOf(documentsMarker);
+        if (documentsIndex !== -1) {
+          return normalized.slice(documentsIndex);
+        }
+
+        return normalized;
+      };
+
       const loadedImages = await Promise.all(
         rawImages.map(async (image) => {
           try {
@@ -106,9 +125,7 @@ export default function ImageSearch() {
 
             // Use customDocument field to fetch the JSON file with base64 data
             const jsonFilePath = image.customDocument || image.url;
-            const imageUrl = jsonFilePath
-              .replace("file://", "")
-              .replace(String(process.env.STORAGE_DIR || ""), "");
+            const imageUrl = toPublicDocumentUrl(jsonFilePath);
             
             console.log(`Fetching image data from: ${imageUrl}`);
             
